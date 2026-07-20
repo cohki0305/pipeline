@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
-import type { PrComment, PrSummary } from "./github";
+import type { PrComment, PrFailedCheck, PrSummary } from "./github";
 import { babysitPr, isNewComment, isTrustedComment, matchesBranch, runBabysit } from "./babysit";
 
 const CONFIG = {
@@ -16,6 +16,8 @@ const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
 function makeDeps(opts: {
   prs?: PrSummary[];
   comments?: PrComment[];
+  failedChecks?: PrFailedCheck[];
+  failedCiLog?: string;
   mergeFails?: boolean;
   lastCommit?: string;
   babysitBranches?: string[];
@@ -44,6 +46,8 @@ function makeDeps(opts: {
       createPr: async () => "",
       listOpenPrs: async () => opts.prs ?? [],
       getPrComments: async () => opts.comments ?? [],
+      getPrFailedChecks: async () => opts.failedChecks ?? [],
+      getWorkflowRunFailedLog: async () => opts.failedCiLog ?? "",
     },
     projectRoot: "/repo",
     log: () => {},
@@ -94,6 +98,24 @@ describe("babysitPr", () => {
     expect(r.actions).toEqual([]);
     expect(h.agentCalls).toHaveLength(0);
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
+  });
+
+  test("CI 失敗時はログを composer に渡して修正して push する", async () => {
+    const h = makeDeps({
+      failedChecks: [
+        {
+          name: "test-typescript",
+          conclusion: "FAILURE",
+          detailsUrl: "https://github.com/x/y/actions/runs/42/job/1",
+        },
+      ],
+      failedCiLog: "error: lint:test-co-location failed",
+    });
+    const r = await babysitPr(h.deps, PR);
+    expect(r.actions).toEqual(["ci-fixed(test-typescript)"]);
+    expect(h.agentCalls[0]!.agent).toBe("composer");
+    expect(h.agentCalls[0]!.prompt).toContain("lint:test-co-location failed");
+    expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
 
   test("信頼できない投稿者（外部ユーザー）のコメントは無視する", async () => {

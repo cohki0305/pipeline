@@ -62,6 +62,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
 - **レビューコメント対応はブランチ単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリごとに設定）にマッチする PR のみ。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
 - 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
+- **CI 失敗対応も babysitBranches 対象 PR のみ**: `gh pr view --json statusCheckRollup` で失敗チェックを検知し、`gh run view <run-id> --log-failed` のログを Composer 2.5 に渡して修正 → 品質ゲート → コミット → push。relay の `check_suite` 失敗イベントでも同じ babysit が起動する
 - 自分で設定したレビュー bot（Codex クラウドレビュー等、association が NONE になる）を信頼したい場合は `.agent-pipeline.json` に `"babysitTrustedAuthors": ["chatgpt-codex-connector[bot]"]` を追加する。login の `[bot]` サフィックスは有無を問わず照合される。**その bot のコメントはコマンド実行権限を持つエージェントへのプロンプトになるため、自分の管理下にある bot だけを載せること**
 - **保護ブランチの例外**: head が `babysitExcludeBranches`（省略時 `["main", "master", "develop", "release/*"]`）にマッチする PR には、コンフリクト解消も含め一切触らない
 - 対象ブランチの管理コマンド: `pipeline branch [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、`.agent-pipeline.json` を書き換える）
@@ -76,7 +77,7 @@ GitHub ──webhook(HMAC)──→ relay/ の Worker（Cloudflare、workers.dev
 ```
 
 - Worker: `relay/` を `bunx wrangler deploy`。secrets: `WEBHOOK_SECRET`（GitHub 署名検証）/ `CLIENT_TOKEN`（クライアント認証）は**必須**（未設定の場合 Worker は全リクエストを 500 で拒否する fail-closed 設計）。`openssl rand -hex 32` 等で十分な長さのランダム値を使う
-- リポジトリ側: webhook を `<worker URL>/webhook` に登録（events: issue_comment, pull_request_review, pull_request_review_comment, push）
+- リポジトリ側: webhook を `<worker URL>/webhook` に登録（events: issue_comment, pull_request_review, pull_request_review_comment, push, check_suite）
 - ローカル側: `~/.agent-pipeline/relay.json` を置き、relay-client を常駐させる（pidfile で多重起動防止）。複数プロジェクトは `projects`（`"owner/repo": projectRoot` マップ）で振り分ける。Worker が broadcast に含める `repo`（repository.full_name）でルーティングし、マップにない repo のイベントは無視する。旧形式の単一 `projectRoot` も後方互換で動く（repo 情報がないメッセージのフォールバック先にもなる）
 
   ```json

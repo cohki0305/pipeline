@@ -1,4 +1,5 @@
 import type { AgentRunner } from "./agents";
+import { buildCiFailurePrompt, pickWorkflowRunId } from "./ci-status";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
 import type { Github, PrComment, PrSummary } from "./github";
@@ -83,7 +84,7 @@ async function push(deps: BabysitDeps, cwd: string, branch: string): Promise<voi
   if (p.code !== 0) throw new Error(`push に失敗: ${p.stderr}`);
 }
 
-export type BabysitOpts = { comments?: boolean };
+export type BabysitOpts = { comments?: boolean; ci?: boolean };
 
 export async function babysitPr(deps: BabysitDeps, pr: PrSummary, opts: BabysitOpts = {}): Promise<PrAction> {
   const cwd = await ensurePrWorktree(deps, safeRef(pr.headRefName));
@@ -130,6 +131,24 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
     actions.push(`comments-addressed(${comments.length})`);
   }
 
+  if (opts.ci !== false) {
+    const failedChecks = await deps.github.getPrFailedChecks(deps.projectRoot, pr.number);
+    if (failedChecks.length > 0) {
+      const runId = pickWorkflowRunId(failedChecks);
+      if (runId == null) {
+        deps.log(`#${pr.number}: CI 失敗を検知したが workflow run id を取得できませんでした`);
+      } else {
+        const logs = await deps.github.getWorkflowRunFailedLog(deps.projectRoot, runId);
+        deps.log(`#${pr.number}: CI 失敗 (${failedChecks.map((check) => check.name).join(", ")}) → composer が修正`);
+        await deps.agent("composer", buildCiFailurePrompt(failedChecks, logs), { cwd });
+        await passQualityGate(deps, cwd, "composer");
+        await commitAll(deps, cwd, "CI 失敗に対応");
+        await push(deps, cwd, head);
+        actions.push(`ci-fixed(${failedChecks.map((check) => check.name).join(",")})`);
+      }
+    }
+  }
+
   return { number: pr.number, actions };
 }
 
@@ -154,12 +173,13 @@ export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
   const results: PrAction[] = [];
   for (const pr of await deps.github.listOpenPrs(deps.projectRoot)) {
     if (matchesBranch(excludes, pr.headRefName)) continue;
-    // コンフリクト解消は全 PR、コメント対応は babysitBranches にマッチするブランチのみ
+    // コンフリクト解消は全 PR、コメント/CI 対応は babysitBranches にマッチするブランチのみ
     const wantComments = matchesBranch(patterns, pr.headRefName);
+    const wantCi = wantComments;
     const wantConflict = pr.mergeable === "CONFLICTING";
-    if (!wantComments && !wantConflict) continue;
+    if (!wantComments && !wantConflict && !wantCi) continue;
     try {
-      results.push(await babysitPr(deps, pr, { comments: wantComments }));
+      results.push(await babysitPr(deps, pr, { comments: wantComments, ci: wantCi }));
     } catch (e) {
       const reason = e instanceof Error ? e.message.slice(0, 200) : String(e);
       deps.log(`#${pr.number}: 処理失敗 — ${reason}`);

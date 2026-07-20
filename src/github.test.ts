@@ -100,3 +100,41 @@ describe("createPr", () => {
     expect(readFileSync(calls[0]!.opts.env!.PR_BODY_FILE!, "utf8")).toBe("b");
   });
 });
+
+describe("getPrFailedChecks", () => {
+  test("失敗した statusCheckRollup だけ返す", async () => {
+    const { exec, calls } = fakeExec({
+      code: 0,
+      stdout: JSON.stringify({
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "ok", conclusion: "SUCCESS", detailsUrl: null },
+          {
+            __typename: "CheckRun",
+            name: "test-typescript",
+            conclusion: "FAILURE",
+            detailsUrl: "https://github.com/x/y/actions/runs/42/job/1",
+          },
+        ],
+      }),
+    });
+    const gh = makeGithub(exec);
+    expect(await gh.getPrFailedChecks("/repo", 33)).toEqual([
+      {
+        __typename: "CheckRun",
+        name: "test-typescript",
+        conclusion: "FAILURE",
+        detailsUrl: "https://github.com/x/y/actions/runs/42/job/1",
+      },
+    ]);
+    expect(calls[0]!.cmd).toBe("gh pr view 33 --json statusCheckRollup");
+  });
+});
+
+describe("getWorkflowRunFailedLog", () => {
+  test("gh run view --log-failed の出力を返す", async () => {
+    const { exec, calls } = fakeExec({ code: 0, stdout: "error: lint failed\n", stderr: "" });
+    const gh = makeGithub(exec);
+    expect(await gh.getWorkflowRunFailedLog("/repo", 42)).toBe("error: lint failed");
+    expect(calls[0]!.cmd).toBe("gh run view 42 --log-failed");
+  });
+});

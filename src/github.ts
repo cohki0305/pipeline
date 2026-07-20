@@ -1,11 +1,13 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { findFailedChecks, pickWorkflowRunId, trimCiLog, type StatusCheck } from "./ci-status";
 import type { Exec } from "./exec";
 
 export type Issue = { number: number; title: string; body: string };
 export type PrSummary = { number: number; headRefName: string; baseRefName: string; mergeable: string };
 export type PrComment = { author: string; authorAssociation: string; body: string; path: string | null; createdAt: string };
+export type PrFailedCheck = Pick<StatusCheck, "name" | "conclusion" | "detailsUrl">;
 
 export type Github = {
   fetchIssue(cwd: string, num: number): Promise<Issue>;
@@ -13,6 +15,8 @@ export type Github = {
   listOpenPrs(cwd: string): Promise<PrSummary[]>;
   getPr(cwd: string, num: number): Promise<PrSummary>;
   getPrComments(cwd: string, num: number): Promise<PrComment[]>;
+  getPrFailedChecks(cwd: string, num: number): Promise<PrFailedCheck[]>;
+  getWorkflowRunFailedLog(cwd: string, runId: number): Promise<string>;
 };
 
 export function makeGithub(exec: Exec): Github {
@@ -83,6 +87,17 @@ export function makeGithub(exec: Exec): Github {
           createdAt: c.created_at ?? "",
         })),
       ];
+    },
+    async getPrFailedChecks(cwd, num) {
+      const r = await exec(`gh pr view ${num} --json statusCheckRollup`, { cwd });
+      if (r.code !== 0) throw new Error(`PR #${num} の CI 状態取得に失敗: ${r.stderr}`);
+      const data = JSON.parse(r.stdout) as { statusCheckRollup?: StatusCheck[] };
+      return findFailedChecks(data.statusCheckRollup ?? []);
+    },
+    async getWorkflowRunFailedLog(cwd, runId) {
+      const r = await exec(`gh run view ${runId} --log-failed`, { cwd, timeoutMs: 120_000 });
+      if (r.code !== 0) throw new Error(`workflow run ${runId} のログ取得に失敗: ${r.stderr}`);
+      return trimCiLog(`${r.stdout}\n${r.stderr}`.trim());
     },
   };
 }
