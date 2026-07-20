@@ -62,6 +62,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
 - **レビューコメント対応はブランチ単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリごとに設定）にマッチする PR のみ。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
 - 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
+- 自分で設定したレビュー bot（Codex クラウドレビュー等、association が NONE になる）を信頼したい場合は `.agent-pipeline.json` に `"babysitTrustedAuthors": ["chatgpt-codex-connector[bot]"]` を追加する。login の `[bot]` サフィックスは有無を問わず照合される。**その bot のコメントはコマンド実行権限を持つエージェントへのプロンプトになるため、自分の管理下にある bot だけを載せること**
 - **保護ブランチの例外**: head が `babysitExcludeBranches`（省略時 `["main", "master", "develop", "release/*"]`）にマッチする PR には、コンフリクト解消も含め一切触らない
 - 対象ブランチの管理コマンド: `pipeline branch [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、`.agent-pipeline.json` を書き換える）
 - PR ブランチが既にどこかの worktree に checkout 済みの場合はその worktree を再利用する

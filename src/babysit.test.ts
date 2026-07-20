@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
 import type { PrComment, PrSummary } from "./github";
-import { babysitPr, isNewComment, matchesBranch, runBabysit } from "./babysit";
+import { babysitPr, isNewComment, isTrustedComment, matchesBranch, runBabysit } from "./babysit";
 
 const CONFIG = {
   commands: { lint: "run-lint", typecheck: "run-tc", test: "run-test" },
@@ -202,5 +202,32 @@ describe("runBabysit", () => {
     const results = await runBabysit(h.deps);
     expect(results.map((r) => r.number)).toEqual([300, 193]);
     expect(results[0]!.actions[0]).toContain("error");
+  });
+});
+
+describe("isTrustedComment", () => {
+  const comment = (author: string, authorAssociation: string): PrComment => ({
+    author,
+    authorAssociation,
+    body: "x",
+    path: null,
+    createdAt: "2026-07-20T00:00:00Z",
+  });
+
+  test("OWNER/MEMBER/COLLABORATOR は allowlist なしで信頼される", () => {
+    expect(isTrustedComment(comment("alice", "OWNER"))).toBe(true);
+    expect(isTrustedComment(comment("bob", "NONE"))).toBe(false);
+  });
+
+  test("allowlist に載った author は association が NONE でも信頼される", () => {
+    const trusted = ["chatgpt-codex-connector[bot]"];
+    expect(isTrustedComment(comment("chatgpt-codex-connector[bot]", "NONE"), trusted)).toBe(true);
+    expect(isTrustedComment(comment("someone-else", "NONE"), trusted)).toBe(false);
+  });
+
+  test("[bot] サフィックスの有無は正規化して照合する（GraphQL と REST で login 表記が異なる）", () => {
+    const trusted = ["chatgpt-codex-connector[bot]"];
+    expect(isTrustedComment(comment("chatgpt-codex-connector", "NONE"), trusted)).toBe(true);
+    expect(isTrustedComment(comment("chatgpt-codex", "NONE"), trusted)).toBe(false);
   });
 });

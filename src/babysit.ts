@@ -8,8 +8,13 @@ import { commitAll, passQualityGate } from "./run";
 // コメントは第三者も書けるため、コード修正の指示として扱うのはリポジトリ関係者のものに限る
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-export function isTrustedComment(c: PrComment): boolean {
-  return TRUSTED_ASSOCIATIONS.has(c.authorAssociation);
+// GraphQL (gh pr view) は "name"、REST は "name[bot]" と bot login の表記が揺れるため正規化して照合する
+const normalizeLogin = (login: string) => login.replace(/\[bot\]$/, "");
+
+export function isTrustedComment(c: PrComment, trustedAuthors?: string[]): boolean {
+  if (TRUSTED_ASSOCIATIONS.has(c.authorAssociation)) return true;
+  if (!trustedAuthors) return false;
+  return trustedAuthors.some((a) => normalizeLogin(a) === normalizeLogin(c.author));
 }
 
 export type BabysitDeps = {
@@ -112,7 +117,7 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
   const fresh = (await deps.github.getPrComments(deps.projectRoot, pr.number)).filter((c) =>
     isNewComment(c, lastCommit),
   );
-  const comments = fresh.filter(isTrustedComment);
+  const comments = fresh.filter((c) => isTrustedComment(c, deps.config.babysitTrustedAuthors));
   if (fresh.length !== comments.length) {
     deps.log(`#${pr.number}: 信頼できない投稿者のコメント ${fresh.length - comments.length} 件を無視`);
   }

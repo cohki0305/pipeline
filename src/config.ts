@@ -10,6 +10,8 @@ export type PipelineConfig = {
   postWorktreeSetup?: string;
   babysitBranches?: string[];
   babysitExcludeBranches?: string[];
+  /** association に依らず信頼する投稿者 login（自分で設定したレビュー bot 等）。"[bot]" サフィックスは有無を問わない */
+  babysitTrustedAuthors?: string[];
 };
 
 const DEFAULTS = {
