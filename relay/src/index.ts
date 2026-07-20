@@ -27,7 +27,16 @@ export class Relay extends DurableObject<Env> {
   async webSocketMessage(): Promise<void> {}
 }
 
-const FORWARD_EVENTS = new Set(["issue_comment", "pull_request_review", "pull_request_review_comment", "push"]);
+const FORWARD_EVENTS = new Set([
+  "issue_comment",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "push",
+  "check_suite",
+]);
+
+// CI は失敗系の完了だけ babysit のトリガーにする（成功まで転送すると無駄な起動が増える）
+const CI_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure"]);
 
 async function validSignature(secret: string, body: string, signature: string | null): Promise<boolean> {
   if (!signature?.startsWith("sha256=")) return false;
@@ -72,13 +81,24 @@ export default {
         issue?: { number?: number };
         pull_request?: { number?: number };
         repository?: { full_name?: string };
+        check_suite?: { conclusion?: string; pull_requests?: { number?: number }[] };
       };
       if (event === "push" && payload.ref !== "refs/heads/main") return new Response("ignored");
+      if (
+        event === "check_suite" &&
+        (payload.action !== "completed" || !CI_FAILURE_CONCLUSIONS.has(payload.check_suite?.conclusion ?? ""))
+      ) {
+        return new Response("ignored");
+      }
       const delivered = await relay.broadcast(
         JSON.stringify({
           event,
           action: payload.action ?? null,
-          pr: payload.issue?.number ?? payload.pull_request?.number ?? null,
+          pr:
+            payload.issue?.number ??
+            payload.pull_request?.number ??
+            payload.check_suite?.pull_requests?.[0]?.number ??
+            null,
           repo: payload.repository?.full_name ?? null,
         }),
       );
