@@ -52,7 +52,7 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 
 プロジェクトルートで `bun run babysit`（1 回走査）。イベント駆動の常駐監視は relay 構成で行う（下記）。
 
-- 対象: `issue-*` ブランチの open PR
+- 対象: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリ単位）にマッチする open PR。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
 - コンフリクト（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
 - 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
 

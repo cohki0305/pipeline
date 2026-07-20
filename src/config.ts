@@ -8,6 +8,7 @@ export type PipelineConfig = {
   baseBranch: string;
   worktreeRoot: string;
   postWorktreeSetup?: string;
+  babysitBranches?: string[];
 };
 
 const DEFAULTS = {

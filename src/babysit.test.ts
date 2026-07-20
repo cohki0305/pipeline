@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
 import type { PrComment, PrSummary } from "./github";
-import { babysitPr, isNewComment, runBabysit } from "./babysit";
+import { babysitPr, isNewComment, matchesBranch, runBabysit } from "./babysit";
 
 const CONFIG = {
   commands: { lint: "run-lint", typecheck: "run-tc", test: "run-test" },
@@ -13,11 +13,17 @@ const CONFIG = {
 } satisfies PipelineConfig;
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
 
-function makeDeps(opts: { prs?: PrSummary[]; comments?: PrComment[]; mergeFails?: boolean; lastCommit?: string }) {
+function makeDeps(opts: {
+  prs?: PrSummary[];
+  comments?: PrComment[];
+  mergeFails?: boolean;
+  lastCommit?: string;
+  babysitBranches?: string[];
+}) {
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
   const deps = {
-    config: CONFIG,
+    config: opts.babysitBranches ? { ...CONFIG, babysitBranches: opts.babysitBranches } : CONFIG,
     exec: async (cmd: string): Promise<ExecResult> => {
       execCalls.push(cmd);
       if (cmd.startsWith("test -d")) return OK;
@@ -108,12 +114,35 @@ describe("babysitPr", () => {
   });
 });
 
+describe("matchesBranch", () => {
+  test("glob パターンでブランチ名を照合する", () => {
+    expect(matchesBranch(["issue-*"], "issue-153")).toBe(true);
+    expect(matchesBranch(["issue-*"], "feature-x")).toBe(false);
+    expect(matchesBranch(["issue-*", "serp-api"], "serp-api")).toBe(true);
+    expect(matchesBranch(["serp-api"], "serp-api-2")).toBe(false);
+    expect(matchesBranch(["fix.*"], "fixXbranch")).toBe(false);
+  });
+});
+
 describe("runBabysit", () => {
-  test("issue-* ブランチの PR だけを対象にする", async () => {
+  test("デフォルトは issue-* ブランチの PR だけを対象にする", async () => {
     const h = makeDeps({
       prs: [PR, { number: 200, headRefName: "feature-x", baseRefName: "main", mergeable: "MERGEABLE" }],
     });
     const results = await runBabysit(h.deps);
     expect(results.map((r) => r.number)).toEqual([193]);
+  });
+
+  test("babysitBranches 設定でリポジトリごとに対象を決められる", async () => {
+    const h = makeDeps({
+      babysitBranches: ["issue-*", "serp-api"],
+      prs: [
+        PR,
+        { number: 194, headRefName: "serp-api", baseRefName: "main", mergeable: "MERGEABLE" },
+        { number: 200, headRefName: "feature-x", baseRefName: "main", mergeable: "MERGEABLE" },
+      ],
+    });
+    const results = await runBabysit(h.deps);
+    expect(results.map((r) => r.number)).toEqual([193, 194]);
   });
 });

@@ -108,8 +108,21 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
   return { number: pr.number, actions };
 }
 
+// 監視対象ブランチはリポジトリ単位の設定（babysitBranches、glob）で決める。既定はパイプライン製 PR のみ
+export function matchesBranch(patterns: string[], branch: string): boolean {
+  return patterns.some((p) => {
+    const re = new RegExp(`^${p.split("*").map(escapeRegExp).join(".*")}$`);
+    return re.test(branch);
+  });
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
-  const prs = (await deps.github.listOpenPrs(deps.projectRoot)).filter((p) => /^issue-\d+$/.test(p.headRefName));
+  const patterns = deps.config.babysitBranches ?? ["issue-*"];
+  const prs = (await deps.github.listOpenPrs(deps.projectRoot)).filter((p) => matchesBranch(patterns, p.headRefName));
   const results: PrAction[] = [];
   for (const pr of prs) results.push(await babysitPr(deps, pr));
   return results;
