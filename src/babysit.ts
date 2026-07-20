@@ -43,7 +43,23 @@ export function isNewComment(c: PrComment, lastCommitIso: string): boolean {
   return created > last;
 }
 
+// 同一ブランチは二重 checkout できないため、既存 worktree（projectRoot 自身を含む）を最優先で再利用する
+async function findExistingWorktree(deps: BabysitDeps, branch: string): Promise<string | null> {
+  const r = await deps.exec("git worktree list --porcelain", { cwd: deps.projectRoot });
+  if (r.code !== 0) return null;
+  let current: string | null = null;
+  for (const line of r.stdout.split("\n")) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length).trim();
+    else if (line.startsWith("branch refs/heads/") && line.slice("branch refs/heads/".length).trim() === branch) {
+      return current;
+    }
+  }
+  return null;
+}
+
 async function ensurePrWorktree(deps: BabysitDeps, branch: string): Promise<string> {
+  const existing = await findExistingWorktree(deps, branch);
+  if (existing) return existing;
   const path = `${deps.config.worktreeRoot}/${branch}`;
   const exists = await deps.exec(`test -d "${path}"`, { cwd: deps.projectRoot });
   if (exists.code === 0) return path;
@@ -62,13 +78,15 @@ async function push(deps: BabysitDeps, cwd: string, branch: string): Promise<voi
   if (p.code !== 0) throw new Error(`push に失敗: ${p.stderr}`);
 }
 
-export async function babysitPr(deps: BabysitDeps, pr: PrSummary): Promise<PrAction> {
+export type BabysitOpts = { comments?: boolean };
+
+export async function babysitPr(deps: BabysitDeps, pr: PrSummary, opts: BabysitOpts = {}): Promise<PrAction> {
   const cwd = await ensurePrWorktree(deps, safeRef(pr.headRefName));
-  return babysitWorkdir(deps, pr, cwd);
+  return babysitWorkdir(deps, pr, cwd, opts);
 }
 
 // PR ブランチが checkout 済みのディレクトリで直接処理する（CI 実行用。worktree 管理をしない）
-export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: string): Promise<PrAction> {
+export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: string, opts: BabysitOpts = {}): Promise<PrAction> {
   // ブランチ名は PR 作成者由来の外部入力。シェル補間前に必ず検証する
   const head = safeRef(pr.headRefName);
   const base = safeRef(pr.baseRefName);
@@ -88,6 +106,8 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
     await push(deps, cwd, head);
     actions.push("conflict-resolved");
   }
+
+  if (opts.comments === false) return { number: pr.number, actions };
 
   const fresh = (await deps.github.getPrComments(deps.projectRoot, pr.number)).filter((c) =>
     isNewComment(c, lastCommit),
@@ -122,8 +142,19 @@ function escapeRegExp(s: string): string {
 
 export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
   const patterns = deps.config.babysitBranches ?? ["issue-*"];
-  const prs = (await deps.github.listOpenPrs(deps.projectRoot)).filter((p) => matchesBranch(patterns, p.headRefName));
   const results: PrAction[] = [];
-  for (const pr of prs) results.push(await babysitPr(deps, pr));
+  for (const pr of await deps.github.listOpenPrs(deps.projectRoot)) {
+    // コンフリクト解消は全 PR、コメント対応は babysitBranches にマッチするブランチのみ
+    const wantComments = matchesBranch(patterns, pr.headRefName);
+    const wantConflict = pr.mergeable === "CONFLICTING";
+    if (!wantComments && !wantConflict) continue;
+    try {
+      results.push(await babysitPr(deps, pr, { comments: wantComments }));
+    } catch (e) {
+      const reason = e instanceof Error ? e.message.slice(0, 200) : String(e);
+      deps.log(`#${pr.number}: 処理失敗 — ${reason}`);
+      results.push({ number: pr.number, actions: [`error: ${reason}`] });
+    }
+  }
   return results;
 }

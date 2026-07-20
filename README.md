@@ -52,9 +52,11 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 
 プロジェクトルートで `bun run babysit`（1 回走査）。イベント駆動の常駐監視は relay 構成で行う（下記）。
 
-- 対象: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリ単位）にマッチする open PR。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
-- コンフリクト（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
-- 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
+- **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
+- **レビューコメント対応はブランチ単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリごとに設定）にマッチする PR のみ。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
+- 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
+- 対象ブランチの管理コマンド: `bun run src/babysit-branches-cli.ts [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、package.json に `babysit:branch` として登録推奨）
+- PR ブランチが既にどこかの worktree に checkout 済みの場合はその worktree を再利用する
 
 ## relay（webhook のイベント駆動監視）
 
