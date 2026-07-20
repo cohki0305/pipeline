@@ -1,6 +1,7 @@
 import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
+import { safeRef } from "../git-ref";
 
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Finding = {
@@ -29,7 +30,7 @@ const MAX_DIFF_CHARS = 50_000;
 type ReviewDeps = { agent: AgentRunner; exec: Exec; cwd: string; config: PipelineConfig };
 
 async function getDiff(deps: ReviewDeps): Promise<string> {
-  const d = await deps.exec(`git diff ${deps.config.baseBranch}...HEAD`, { cwd: deps.cwd });
+  const d = await deps.exec(`git diff ${safeRef(deps.config.baseBranch)}...HEAD`, { cwd: deps.cwd });
   if (d.code !== 0) throw new Error(`git diff に失敗: ${d.stderr}`);
   return d.stdout.length > MAX_DIFF_CHARS ? `${d.stdout.slice(0, MAX_DIFF_CHARS)}\n...（以降省略）` : d.stdout;
 }

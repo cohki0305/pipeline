@@ -54,10 +54,12 @@ describe("getPrComments", () => {
         return {
           code: 0,
           stdout: JSON.stringify({
-            comments: [{ author: { login: "koki" }, body: "全体コメント", createdAt: "2026-07-20T10:00:00Z" }],
+            comments: [
+              { author: { login: "koki" }, authorAssociation: "OWNER", body: "全体コメント", createdAt: "2026-07-20T10:00:00Z" },
+            ],
             reviews: [
-              { author: { login: "koki" }, body: "レビュー本文", submittedAt: "2026-07-20T11:00:00Z" },
-              { author: { login: "koki" }, body: "", submittedAt: "2026-07-20T11:30:00Z" },
+              { author: { login: "koki" }, authorAssociation: "MEMBER", body: "レビュー本文", submittedAt: "2026-07-20T11:00:00Z" },
+              { author: { login: "koki" }, authorAssociation: "MEMBER", body: "", submittedAt: "2026-07-20T11:30:00Z" },
             ],
           }),
           stderr: "",
@@ -67,7 +69,13 @@ describe("getPrComments", () => {
         return {
           code: 0,
           stdout: JSON.stringify([
-            { user: { login: "koki" }, body: "行コメント", path: "a.ts", created_at: "2026-07-20T12:00:00Z" },
+            {
+              user: { login: "koki" },
+              author_association: "COLLABORATOR",
+              body: "行コメント",
+              path: "a.ts",
+              created_at: "2026-07-20T12:00:00Z",
+            },
           ]),
           stderr: "",
         };
@@ -76,7 +84,8 @@ describe("getPrComments", () => {
     };
     const cs = await makeGithub(exec).getPrComments("/repo", 193);
     expect(cs.map((c) => c.body)).toEqual(["全体コメント", "レビュー本文", "行コメント"]);
-    expect(cs[2]).toMatchObject({ path: "a.ts", author: "koki", createdAt: "2026-07-20T12:00:00Z" });
+    expect(cs[0]!.authorAssociation).toBe("OWNER");
+    expect(cs[2]).toMatchObject({ path: "a.ts", author: "koki", authorAssociation: "COLLABORATOR", createdAt: "2026-07-20T12:00:00Z" });
   });
 });
 

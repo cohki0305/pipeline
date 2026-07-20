@@ -6,7 +6,7 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 
 - CLI: claude / codex / cursor-agent / gh / git / bun（すべて認証済み）
 - 対象リポジトリは GitHub リモートを持つ
-- **issue の作成者が信頼できるリポジトリでのみ使う**。issue 本文はそのまま実装エージェント（コマンド実行権限あり）へのプロンプトになるため、第三者が issue を書けるリポジトリではプロンプトインジェクション経路になる
+- **issue・PR コメントの投稿者が信頼できるリポジトリでのみ使う**。issue 本文と PR コメントはそのまま実装エージェント（コマンド実行権限あり）へのプロンプトになるため、第三者が書き込めるリポジトリではプロンプトインジェクション経路になる。**公開リポジトリでの利用は非推奨**。babysit は緩和策として author association が OWNER / MEMBER / COLLABORATOR のコメントのみ処理し、それ以外は無視する
 - codex を使う場合、`~/.codex/config.toml` に worktree 親ディレクトリの trust エントリを追加しておく（例: `[projects."/path/to/worktrees"] trust_level = "trusted"`）
 
 ## プロジェクトへの導入
@@ -64,7 +64,7 @@ GitHub ──webhook(HMAC)──→ relay/ の Worker（Cloudflare、workers.dev
 ローカル常駐 relay-client ←──(outbound WS)──┘ → babysit 実行（15 秒デバウンス、失敗時 60 秒後 1 リトライ）
 ```
 
-- Worker: `relay/` を `bunx wrangler deploy`。secrets: `WEBHOOK_SECRET`（GitHub 署名検証）/ `CLIENT_TOKEN`（クライアント認証）
+- Worker: `relay/` を `bunx wrangler deploy`。secrets: `WEBHOOK_SECRET`（GitHub 署名検証）/ `CLIENT_TOKEN`（クライアント認証）は**必須**（未設定の場合 Worker は全リクエストを 500 で拒否する fail-closed 設計）。`openssl rand -hex 32` 等で十分な長さのランダム値を使う
 - リポジトリ側: webhook を `<worker URL>/webhook` に登録（events: issue_comment, pull_request_review, pull_request_review_comment, push）
 - ローカル側: `~/.agent-pipeline/relay.json`（url / token / projectRoot）を置き、relay-client を常駐させる（pidfile で多重起動防止）
 - 恒久化: systemd user service（`~/.config/systemd/user/relay-client.service`、Restart=always）+ `loginctl enable-linger` でブート時自動起動。フォールバックに user crontab の `@reboot` エントリ。操作: `systemctl --user {status,restart} relay-client`

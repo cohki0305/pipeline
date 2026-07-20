@@ -2,6 +2,7 @@ import type { AgentName, AgentRunner } from "./agents";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
 import type { Github } from "./github";
+import { safeRef } from "./git-ref";
 import { RunReport } from "./report";
 import { loadDesign, runDesign } from "./stages/design";
 import { buildFixPrompt, implementerFor, runImplement } from "./stages/implement";
@@ -43,7 +44,7 @@ async function setupWorktree(deps: Deps, issueNumber: number): Promise<string> {
   if (exists.code === 0) return path;
   // ディレクトリだけ消された残骸があると add が失敗するため先に掃除する
   await deps.exec("git worktree prune", { cwd: deps.projectRoot });
-  const r = await deps.exec(`git worktree add "${path}" -b ${branch} ${deps.config.baseBranch}`, {
+  const r = await deps.exec(`git worktree add "${path}" -b ${branch} ${safeRef(deps.config.baseBranch)}`, {
     cwd: deps.projectRoot,
   });
   if (r.code !== 0) {

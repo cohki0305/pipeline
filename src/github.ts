@@ -5,7 +5,7 @@ import type { Exec } from "./exec";
 
 export type Issue = { number: number; title: string; body: string };
 export type PrSummary = { number: number; headRefName: string; baseRefName: string; mergeable: string };
-export type PrComment = { author: string; body: string; path: string | null; createdAt: string };
+export type PrComment = { author: string; authorAssociation: string; body: string; path: string | null; createdAt: string };
 
 export type Github = {
   fetchIssue(cwd: string, num: number): Promise<Issue>;
@@ -46,13 +46,14 @@ export function makeGithub(exec: Exec): Github {
       const view = await exec(`gh pr view ${num} --json comments,reviews`, { cwd });
       if (view.code !== 0) throw new Error(`PR #${num} のコメント取得に失敗: ${view.stderr}`);
       const data = JSON.parse(view.stdout) as {
-        comments?: { author?: { login?: string }; body?: string; createdAt?: string }[];
-        reviews?: { author?: { login?: string }; body?: string; submittedAt?: string }[];
+        comments?: { author?: { login?: string }; authorAssociation?: string; body?: string; createdAt?: string }[];
+        reviews?: { author?: { login?: string }; authorAssociation?: string; body?: string; submittedAt?: string }[];
       };
       const inline = await exec(`gh api "repos/{owner}/{repo}/pulls/${num}/comments"`, { cwd });
       if (inline.code !== 0) throw new Error(`PR #${num} のインラインコメント取得に失敗: ${inline.stderr}`);
       const inlineData = JSON.parse(inline.stdout) as {
         user?: { login?: string };
+        author_association?: string;
         body?: string;
         path?: string;
         created_at?: string;
@@ -60,15 +61,23 @@ export function makeGithub(exec: Exec): Github {
       return [
         ...(data.comments ?? []).map((c) => ({
           author: c.author?.login ?? "",
+          authorAssociation: c.authorAssociation ?? "NONE",
           body: c.body ?? "",
           path: null,
           createdAt: c.createdAt ?? "",
         })),
         ...(data.reviews ?? [])
           .filter((rv) => rv.body?.trim())
-          .map((rv) => ({ author: rv.author?.login ?? "", body: rv.body ?? "", path: null, createdAt: rv.submittedAt ?? "" })),
+          .map((rv) => ({
+            author: rv.author?.login ?? "",
+            authorAssociation: rv.authorAssociation ?? "NONE",
+            body: rv.body ?? "",
+            path: null,
+            createdAt: rv.submittedAt ?? "",
+          })),
         ...inlineData.map((c) => ({
           author: c.user?.login ?? "",
+          authorAssociation: c.author_association ?? "NONE",
           body: c.body ?? "",
           path: c.path ?? null,
           createdAt: c.created_at ?? "",

@@ -40,14 +40,22 @@ async function validSignature(secret: string, body: string, signature: string | 
   );
   const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
   const expected = `sha256=${[...mac].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-  if (expected.length !== signature.length) return false;
+  return timingSafeEqual(expected, signature);
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // secrets 未設定のままデプロイされた場合は fail-closed
+    if (!env.WEBHOOK_SECRET || !env.CLIENT_TOKEN) {
+      return new Response("relay not configured", { status: 500 });
+    }
     const url = new URL(request.url);
     const relay = env.RELAY.getByName("main");
 
@@ -76,7 +84,7 @@ export default {
     }
 
     if (url.pathname === "/connect") {
-      if (request.headers.get("authorization") !== `Bearer ${env.CLIENT_TOKEN}`) {
+      if (!timingSafeEqual(request.headers.get("authorization") ?? "", `Bearer ${env.CLIENT_TOKEN}`)) {
         return new Response("unauthorized", { status: 401 });
       }
       return relay.fetch(request);

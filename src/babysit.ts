@@ -2,7 +2,15 @@ import type { AgentRunner } from "./agents";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
 import type { Github, PrComment, PrSummary } from "./github";
+import { safeRef } from "./git-ref";
 import { commitAll, passQualityGate } from "./run";
+
+// コメントは第三者も書けるため、コード修正の指示として扱うのはリポジトリ関係者のものに限る
+const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+export function isTrustedComment(c: PrComment): boolean {
+  return TRUSTED_ASSOCIATIONS.has(c.authorAssociation);
+}
 
 export type BabysitDeps = {
   config: PipelineConfig;
@@ -55,38 +63,45 @@ async function push(deps: BabysitDeps, cwd: string, branch: string): Promise<voi
 }
 
 export async function babysitPr(deps: BabysitDeps, pr: PrSummary): Promise<PrAction> {
-  const cwd = await ensurePrWorktree(deps, pr.headRefName);
+  const cwd = await ensurePrWorktree(deps, safeRef(pr.headRefName));
   return babysitWorkdir(deps, pr, cwd);
 }
 
 // PR ブランチが checkout 済みのディレクトリで直接処理する（CI 実行用。worktree 管理をしない）
 export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: string): Promise<PrAction> {
+  // ブランチ名は PR 作成者由来の外部入力。シェル補間前に必ず検証する
+  const head = safeRef(pr.headRefName);
+  const base = safeRef(pr.baseRefName);
   const actions: string[] = [];
-  await deps.exec(`git fetch origin ${pr.baseRefName}`, { cwd });
+  await deps.exec(`git fetch origin ${base}`, { cwd });
   // コメントの新旧判定は作業前の最終コミット時刻を基準にする
   const lastCommit = (await deps.exec("git log -1 --format=%cI", { cwd })).stdout.trim();
 
   if (pr.mergeable === "CONFLICTING") {
-    const m = await deps.exec(`git merge --no-edit origin/${pr.baseRefName}`, { cwd });
+    const m = await deps.exec(`git merge --no-edit origin/${base}`, { cwd });
     if (m.code !== 0) {
       deps.log(`#${pr.number}: コンフリクト → composer が解消`);
-      await deps.agent("composer", buildConflictPrompt(pr.baseRefName), { cwd });
+      await deps.agent("composer", buildConflictPrompt(base), { cwd });
       await passQualityGate(deps, cwd, "composer");
-      await commitAll(deps, cwd, `origin/${pr.baseRefName} をマージしてコンフリクト解消`);
+      await commitAll(deps, cwd, `origin/${base} をマージしてコンフリクト解消`);
     }
-    await push(deps, cwd, pr.headRefName);
+    await push(deps, cwd, head);
     actions.push("conflict-resolved");
   }
 
-  const comments = (await deps.github.getPrComments(deps.projectRoot, pr.number)).filter((c) =>
+  const fresh = (await deps.github.getPrComments(deps.projectRoot, pr.number)).filter((c) =>
     isNewComment(c, lastCommit),
   );
+  const comments = fresh.filter(isTrustedComment);
+  if (fresh.length !== comments.length) {
+    deps.log(`#${pr.number}: 信頼できない投稿者のコメント ${fresh.length - comments.length} 件を無視`);
+  }
   if (comments.length > 0) {
     deps.log(`#${pr.number}: 新規コメント ${comments.length} 件 → composer が対応`);
     await deps.agent("composer", buildCommentsPrompt(JSON.stringify(comments, null, 2)), { cwd });
     await passQualityGate(deps, cwd, "composer");
     await commitAll(deps, cwd, "PR レビューコメントに対応");
-    await push(deps, cwd, pr.headRefName);
+    await push(deps, cwd, head);
     actions.push(`comments-addressed(${comments.length})`);
   }
 
