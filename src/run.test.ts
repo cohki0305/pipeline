@@ -89,7 +89,9 @@ describe("runPipeline", () => {
     const implementCall = h.agentCalls[1]!;
     expect(implementCall.agent).toBe("composer");
     expect(h.execCalls).toContain("run-lint");
-    expect(h.execCalls.some((c) => c.startsWith("git worktree add"))).toBe(true);
+    // ローカル main の鮮度に依存しないよう、fetch した origin/<base> を基準に worktree を切る
+    expect(h.execCalls).toContain("git fetch origin main");
+    expect(h.execCalls).toContain('git worktree add "/wt/issue-143" -b issue-143 origin/main');
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
 
@@ -241,7 +243,9 @@ describe("runPipeline", () => {
   test("branch だけ残っている場合は -b なしの add にフォールバックする", async () => {
     const h = makeHarness({
       complexity: "simple",
-      gateFailures: [{ cmd: 'git worktree add "/wt/issue-143" -b issue-143 main', stdout: "branch exists", times: 1 }],
+      gateFailures: [
+        { cmd: 'git worktree add "/wt/issue-143" -b issue-143 origin/main', stdout: "branch exists", times: 1 },
+      ],
     });
     await runPipeline(h.deps, 143);
     expect(h.execCalls).toContain('git worktree add "/wt/issue-143" issue-143');

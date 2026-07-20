@@ -71,6 +71,7 @@ export default {
         ref?: string;
         issue?: { number?: number };
         pull_request?: { number?: number };
+        repository?: { full_name?: string };
       };
       if (event === "push" && payload.ref !== "refs/heads/main") return new Response("ignored");
       const delivered = await relay.broadcast(
@@ -78,6 +79,7 @@ export default {
           event,
           action: payload.action ?? null,
           pr: payload.issue?.number ?? payload.pull_request?.number ?? null,
+          repo: payload.repository?.full_name ?? null,
         }),
       );
       return new Response(`forwarded to ${delivered}`);

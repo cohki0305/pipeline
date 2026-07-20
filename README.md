@@ -76,7 +76,20 @@ GitHub ──webhook(HMAC)──→ relay/ の Worker（Cloudflare、workers.dev
 
 - Worker: `relay/` を `bunx wrangler deploy`。secrets: `WEBHOOK_SECRET`（GitHub 署名検証）/ `CLIENT_TOKEN`（クライアント認証）は**必須**（未設定の場合 Worker は全リクエストを 500 で拒否する fail-closed 設計）。`openssl rand -hex 32` 等で十分な長さのランダム値を使う
 - リポジトリ側: webhook を `<worker URL>/webhook` に登録（events: issue_comment, pull_request_review, pull_request_review_comment, push）
-- ローカル側: `~/.agent-pipeline/relay.json`（url / token / projectRoot）を置き、relay-client を常駐させる（pidfile で多重起動防止）
+- ローカル側: `~/.agent-pipeline/relay.json` を置き、relay-client を常駐させる（pidfile で多重起動防止）。複数プロジェクトは `projects`（`"owner/repo": projectRoot` マップ）で振り分ける。Worker が broadcast に含める `repo`（repository.full_name）でルーティングし、マップにない repo のイベントは無視する。旧形式の単一 `projectRoot` も後方互換で動く（repo 情報がないメッセージのフォールバック先にもなる）
+
+  ```json
+  {
+    "url": "https://<worker>.workers.dev",
+    "token": "<CLIENT_TOKEN>",
+    "projects": {
+      "owner/repo-a": "/path/to/project-a",
+      "owner/repo-b": "/path/to/project-b"
+    }
+  }
+  ```
+
+  webhook の `secret` は全リポジトリで同一（Worker の `WEBHOOK_SECRET` 1 本と照合されるため）。新しいリポジトリを足すときは同じ secret で webhook を登録し、`projects` にエントリを追加して relay-client を再起動する
 - 恒久化: systemd user service（`~/.config/systemd/user/relay-client.service`、Restart=always）+ `loginctl enable-linger` でブート時自動起動。フォールバックに user crontab の `@reboot` エントリ。操作: `systemctl --user {status,restart} relay-client`
 - ポート開放なし（PC からの outbound WebSocket のみ）。main への push・workflow ファイルも不要
 

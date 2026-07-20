@@ -52,13 +52,13 @@ describe("runReview", () => {
   test("diff を取得してプロンプトに埋め込み claude に依頼する", async () => {
     const findings = await runReview({
       exec: async (cmd, opts) => {
-        expect(cmd).toBe("git diff main...HEAD");
+        expect(cmd).toBe("git diff origin/main...HEAD");
         expect(opts?.cwd).toBe("/work");
         return { code: 0, stdout: "diff --git a/x.ts b/x.ts", stderr: "" };
       },
       agent: async (agent, prompt) => {
         expect(agent).toBe("claude");
-        expect(prompt).toContain("git diff main...HEAD");
+        expect(prompt).toContain("git diff origin/main...HEAD");
         expect(prompt).toContain("diff --git a/x.ts b/x.ts");
         return JSON.stringify([FINDING]);
       },

@@ -30,7 +30,8 @@ const MAX_DIFF_CHARS = 50_000;
 type ReviewDeps = { agent: AgentRunner; exec: Exec; cwd: string; config: PipelineConfig };
 
 async function getDiff(deps: ReviewDeps): Promise<string> {
-  const d = await deps.exec(`git diff ${safeRef(deps.config.baseBranch)}...HEAD`, { cwd: deps.cwd });
+  // ローカル base branch の鮮度に依存しないよう origin/<base> と比較する
+  const d = await deps.exec(`git diff origin/${safeRef(deps.config.baseBranch)}...HEAD`, { cwd: deps.cwd });
   if (d.code !== 0) throw new Error(`git diff に失敗: ${d.stderr}`);
   return d.stdout.length > MAX_DIFF_CHARS ? `${d.stdout.slice(0, MAX_DIFF_CHARS)}\n...（以降省略）` : d.stdout;
 }
@@ -51,7 +52,9 @@ ${diff}`;
 
 export async function runReview(deps: ReviewDeps): Promise<Finding[]> {
   const diff = await getDiff(deps);
-  const output = await deps.agent("claude", buildReviewPrompt(deps.config.baseBranch, diff), { cwd: deps.cwd });
+  const output = await deps.agent("claude", buildReviewPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff), {
+    cwd: deps.cwd,
+  });
   return parseFindings(output);
 }
 
@@ -112,7 +115,7 @@ export function parseFollowupOutput(output: string): FollowupResult {
 
 export async function runFollowupReview(deps: ReviewDeps, outstanding: Finding[]): Promise<FollowupResult> {
   const diff = await getDiff(deps);
-  const output = await deps.agent("claude", buildFollowupPrompt(deps.config.baseBranch, diff, outstanding), {
+  const output = await deps.agent("claude", buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding), {
     cwd: deps.cwd,
   });
   return parseFollowupOutput(output);

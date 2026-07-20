@@ -44,7 +44,10 @@ async function setupWorktree(deps: Deps, issueNumber: number): Promise<string> {
   if (exists.code === 0) return path;
   // ディレクトリだけ消された残骸があると add が失敗するため先に掃除する
   await deps.exec("git worktree prune", { cwd: deps.projectRoot });
-  const r = await deps.exec(`git worktree add "${path}" -b ${branch} ${safeRef(deps.config.baseBranch)}`, {
+  // ローカル checkout の鮮度に依存しないよう、必ず fetch 済みの origin/<base> を基準にする
+  const base = safeRef(deps.config.baseBranch);
+  await deps.exec(`git fetch origin ${base}`, { cwd: deps.projectRoot });
+  const r = await deps.exec(`git worktree add "${path}" -b ${branch} origin/${base}`, {
     cwd: deps.projectRoot,
   });
   if (r.code !== 0) {
