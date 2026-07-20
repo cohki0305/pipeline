@@ -6,6 +6,13 @@ describe("safeRef", () => {
     expect(safeRef("main")).toBe("main");
     expect(safeRef("issue-153")).toBe("issue-153");
     expect(safeRef("feature/x.y_z-2")).toBe("feature/x.y_z-2");
+    expect(safeRef("feat/#140-gbp-profile-real-sync")).toBe("feat/#140-gbp-profile-real-sync");
+    expect(safeRef("renovate/@types-node")).toBe("renovate/@types-node");
+  });
+
+  test("# や @ が先頭のブランチ名は拒否する", () => {
+    expect(() => safeRef("#140")).toThrow("ref");
+    expect(() => safeRef("@evil")).toThrow("ref");
   });
 
   test("シェルメタ文字や不正な形は throw する", () => {

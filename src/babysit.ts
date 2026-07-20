@@ -140,10 +140,15 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// 保護ブランチが head の PR には自動 push しない（コンフリクト解消でも例外なし）
+const DEFAULT_EXCLUDES = ["main", "master", "develop", "release/*"];
+
 export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
   const patterns = deps.config.babysitBranches ?? ["issue-*"];
+  const excludes = deps.config.babysitExcludeBranches ?? DEFAULT_EXCLUDES;
   const results: PrAction[] = [];
   for (const pr of await deps.github.listOpenPrs(deps.projectRoot)) {
+    if (matchesBranch(excludes, pr.headRefName)) continue;
     // コンフリクト解消は全 PR、コメント対応は babysitBranches にマッチするブランチのみ
     const wantComments = matchesBranch(patterns, pr.headRefName);
     const wantConflict = pr.mergeable === "CONFLICTING";

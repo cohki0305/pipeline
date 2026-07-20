@@ -33,7 +33,14 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
-const runBabysitOnce = () => shellExec("bun run babysit", { cwd: config.projectRoot, timeoutMs: 45 * 60 * 1000 });
+// プロジェクトの package.json に依存せず、常にグローバルエントリを使う
+const mainPath = new URL("./main.ts", import.meta.url).pathname;
+const runBabysitOnce = () =>
+  shellExec('bun "$PIPELINE_MAIN" babysit', {
+    cwd: config.projectRoot,
+    timeoutMs: 45 * 60 * 1000,
+    env: { PIPELINE_MAIN: mainPath },
+  });
 
 const coalescer = new RunCoalescer(async () => {
   log("babysit 実行");

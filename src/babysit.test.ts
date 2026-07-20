@@ -179,6 +179,19 @@ describe("runBabysit", () => {
     expect(h.agentCalls.some((c) => c.prompt.includes("レビューコメント"))).toBe(false);
   });
 
+  test("main などの保護ブランチが head の PR にはコンフリクトでも触らない", async () => {
+    const h = makeDeps({
+      mergeFails: true,
+      prs: [
+        { number: 301, headRefName: "main", baseRefName: "production", mergeable: "CONFLICTING" },
+        { number: 302, headRefName: "develop", baseRefName: "main", mergeable: "CONFLICTING" },
+      ],
+    });
+    const results = await runBabysit(h.deps);
+    expect(results).toEqual([]);
+    expect(h.agentCalls).toHaveLength(0);
+  });
+
   test("1 件の失敗が全体を止めない", async () => {
     const h = makeDeps({
       prs: [

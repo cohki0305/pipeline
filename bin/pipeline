@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# グローバルエントリ。~/.local/bin などへ symlink して使う: ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline
+exec bun "$(dirname "$(readlink -f "$0")")/../src/main.ts" "$@"

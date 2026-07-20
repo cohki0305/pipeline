@@ -9,6 +9,15 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 - **issue・PR コメントの投稿者が信頼できるリポジトリでのみ使う**。issue 本文と PR コメントはそのまま実装エージェント（コマンド実行権限あり）へのプロンプトになるため、第三者が書き込めるリポジトリではプロンプトインジェクション経路になる。**公開リポジトリでの利用は非推奨**。babysit は緩和策として author association が OWNER / MEMBER / COLLABORATOR のコメントのみ処理し、それ以外は無視する
 - codex を使う場合、`~/.codex/config.toml` に worktree 親ディレクトリの trust エントリを追加しておく（例: `[projects."/path/to/worktrees"] trust_level = "trusted"`）
 
+## インストール（1 回だけ）
+
+```bash
+git clone https://github.com/cohki0305/pipeline ~/agent-pipeline
+ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
+```
+
+以降は**どのプロジェクトでも** `pipeline` コマンドが使える（プロジェクト側の package.json への登録は不要）。
+
 ## プロジェクトへの導入
 
 1. リポジトリ直下に `.agent-pipeline.json` を置く:
@@ -26,11 +35,9 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 
    `commands` の 3 つは必須。それ以外は省略可（上記がデフォルト、`worktreeRoot` はプロジェクトの親ディレクトリ配下、`postWorktreeSetup` はなし）。
 
-2. package.json の scripts に追加（任意）: `"pipeline": "bun run $HOME/agent-pipeline/src/cli.ts"`
-
 ## 実行
 
-プロジェクトルートで `bun run pipeline <issue番号>`
+プロジェクトルートで `pipeline <issue番号>`
 
 - `--design <パス>` を付けると設計ステージを省略し、外部で作った設計書（frontmatter に `complexity: simple|complex` 必須）をそのまま実装に渡す。設計書は worktree の designDocDir にコピーされてコミットされる
 
@@ -50,12 +57,13 @@ GitHub issue 番号を渡すと 設計(Claude) → 実装(Codex Sol / Composer 2
 
 ## babysit（open PR の見張り）
 
-プロジェクトルートで `bun run babysit`（1 回走査）。イベント駆動の常駐監視は relay 構成で行う（下記）。
+プロジェクトルートで `pipeline babysit`（1 回走査）。イベント駆動の常駐監視は relay 構成で行う（下記）。
 
 - **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
 - **レビューコメント対応はブランチ単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリごとに設定）にマッチする PR のみ。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
 - 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
-- 対象ブランチの管理コマンド: `bun run src/babysit-branches-cli.ts [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、package.json に `babysit:branch` として登録推奨）
+- **保護ブランチの例外**: head が `babysitExcludeBranches`（省略時 `["main", "master", "develop", "release/*"]`）にマッチする PR には、コンフリクト解消も含め一切触らない
+- 対象ブランチの管理コマンド: `pipeline branch [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、`.agent-pipeline.json` を書き換える）
 - PR ブランチが既にどこかの worktree に checkout 済みの場合はその worktree を再利用する
 
 ## relay（webhook のイベント駆動監視）
