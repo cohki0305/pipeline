@@ -1,0 +1,5 @@
+{
+  "name": "agent-pipeline",
+  "type": "module",
+  "scripts": { "test": "bun test" }
+}

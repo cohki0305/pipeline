@@ -1,0 +1,16 @@
+[Unit]
+Description=agent-pipeline relay client (GitHub webhook -> local babysit)
+After=network-online.target
+
+[Service]
+# %h = ホームディレクトリ。bun のパスは `which bun` に合わせて調整する
+ExecStart=%h/.bun/bin/bun %h/agent-pipeline/src/relay-client.ts
+WorkingDirectory=%h/agent-pipeline
+Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=10
+StandardOutput=append:%h/.agent-pipeline/relay-client.log
+StandardError=append:%h/.agent-pipeline/relay-client.log
+
+[Install]
+WantedBy=default.target
