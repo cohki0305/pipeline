@@ -3,8 +3,14 @@ import { parseMain } from "./main";
 
 describe("parseMain", () => {
   test("数字は run コマンド", () => {
-    expect(parseMain(["153"])).toEqual({ cmd: "run", issue: 153, designDocPath: undefined });
-    expect(parseMain(["153", "--design", "plan.md"])).toEqual({ cmd: "run", issue: 153, designDocPath: "plan.md" });
+    expect(parseMain(["153"])).toEqual({ cmd: "run", issue: 153, designDocPath: undefined, mode: "resume" });
+    expect(parseMain(["153", "--design", "plan.md"])).toEqual({
+      cmd: "run",
+      issue: 153,
+      designDocPath: "plan.md",
+      mode: "resume",
+    });
+    expect(parseMain(["153", "--fresh"])).toEqual({ cmd: "run", issue: 153, designDocPath: undefined, mode: "fresh" });
   });
 
   test("babysit / babysit-pr / branch / planning-agent のサブコマンド", () => {

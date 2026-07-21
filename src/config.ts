@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PLANNING_AGENTS, type PlanningAgent } from "./planning-agent";
+import { EFFICIENCY_TASK_AGENTS, type EfficiencyTask, type EfficiencyTaskAgent } from "./efficiency-agent";
 
 export type PipelineConfig = {
   commands: { lint: string; typecheck: string; test: string };
@@ -19,6 +20,10 @@ export type PipelineConfig = {
   reviewModel?: string;
   /** 設計・レビュー担当エージェント。未指定は claude。Fable 切れ時は codexSol */
   planningAgent?: PlanningAgent;
+  /** lint 失敗時に composer を呼ぶ前に実行する自動修正コマンド */
+  autoFixCommands?: { lint?: string };
+  /** 設計改訂・消し込みレビュー・ゲート修正など安価タスクの担当。未指定は composerFast */
+  efficiencyAgents?: Partial<Record<EfficiencyTask, EfficiencyTaskAgent>>;
 };
 
 const DEFAULTS = {
@@ -47,6 +52,15 @@ export function loadConfig(projectRoot: string): PipelineConfig {
     throw new Error(
       `planningAgent は ${PLANNING_AGENTS.join(" / ")} のいずれかです（指定値: ${JSON.stringify(cfg.planningAgent)}）`,
     );
+  }
+  if (cfg.efficiencyAgents) {
+    for (const [task, agent] of Object.entries(cfg.efficiencyAgents)) {
+      if (!EFFICIENCY_TASK_AGENTS.includes(agent as EfficiencyTaskAgent)) {
+        throw new Error(
+          `efficiencyAgents.${task} は ${EFFICIENCY_TASK_AGENTS.join(" / ")} のいずれかです（指定値: ${JSON.stringify(agent)}）`,
+        );
+      }
+    }
   }
   return cfg;
 }

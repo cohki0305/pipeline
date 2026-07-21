@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { makeAgentRunner } from "./agents";
 import type { BabysitDeps } from "./babysit";
@@ -20,6 +20,8 @@ export function makePipelineDeps(projectRoot: string): Deps {
       await Bun.write(path, content);
     },
     readFile: (path) => readFile(path, "utf8"),
+    readdir: (dir) => readdir(dir),
+    unlink: (path) => unlink(path),
     // ローカルタイムゾーンの YYYY-MM-DD（toISOString は UTC で日付がずれる）
     date: new Date().toLocaleDateString("sv-SE"),
   };

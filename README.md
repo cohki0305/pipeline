@@ -29,7 +29,13 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
      "reportDir": "docs/agent-pipeline/runs",
      "baseBranch": "main",
      "worktreeRoot": "../pipeline-worktrees",
-     "postWorktreeSetup": "worktree 内で実行する任意のセットアップコマンド"
+     "postWorktreeSetup": "worktree 内で実行する任意のセットアップコマンド",
+     "autoFixCommands": { "lint": "bun run lint:fix" },
+     "efficiencyAgents": {
+       "designRevision": "composerFast",
+       "followupReview": "composerFast",
+       "gateFix": "composerFast"
+     }
    }
    ```
 
@@ -39,22 +45,27 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 
 プロジェクトルートで `pipeline <issue番号>`
 
-- `--design <パス>` を付けると設計ステージを省略し、外部で作った設計書（frontmatter に `complexity: simple|complex` 必須）をそのまま実装に渡す。設計書は worktree の designDocDir にコピーされてコミットされる
+- 既定は **`--resume`**（worktree 内の設計書・`.pipeline-state.json` から中断地点を再開）
+- **`--fresh`** で設計からやり直す（状態ファイルを削除）
+- `--design <パス>` を付けると issue からの設計を省略し、外部設計書を worktree にコピーして実装に渡す（frontmatter に `complexity: simple|complex` 必須）
 
 - exit 0: PR 作成まで完了（stdout に URL）
-- exit 2: 修正ループ上限超過。stderr に残違反。worktree は残るので手動で続きから対応可能
+- exit 2: 修正ループ上限超過。stderr に残違反。worktree は残るので `pipeline <issue番号>` で再開可能
 - その他: 環境エラー（設定不備・認証切れ等）
 
 ## 挙動の要点
 
+- **実装への入力は常に設計書のみ**。初回は issue から設計書を作り、レビュー指摘は設計書を更新してから実装に渡す（`lintable: true` の blocking 指摘だけ composer-fast が直接修正して設計ループを bypass）
+- 再実行（`--resume`）: 設計書があれば設計スキップ、`.pipeline-state.json` で実装・品質ゲート・レビュー途中から再開
 - 実装の担当は設計 doc の complexity で決まる: simple → Composer 2.5 / complex → Codex Sol（判断基準は `src/stages/design.ts` の `COMPLEXITY_CRITERIA`）
-- lint/typecheck 違反は常に Composer 2.5 が修正、テスト失敗とレビュー指摘は実装担当が修正
-- 修正ループ: 品質ゲートは最大 3 回。レビューは指摘件数が減り続ける限り継続し、停滞（件数が減らない）または 3 ラウンドで停止。レビュー修正後は必ず品質ゲートを再実行してからコミットする
+- lint/typecheck 違反は Composer 2.5-fast が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）、テスト失敗は実装担当が修正
+- 設計改訂・消し込みレビューは既定で **composer-fast**（`efficiencyAgents` で `codexSol` 等に上書き可）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
+- 修正ループ: 品質ゲートは最大 3 回。レビューは指摘件数が減り続ける限り継続し、停滞（件数が減らない）または 3 ラウンドで停止。レビュー反映後は必ず品質ゲートを再実行してからコミットする
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）
 - 消し込み方式: 2 巡目以降のレビューは diff 全体の再レビューではなく、前回指摘リスト（id 付き）の fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加のみ
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
-- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等で claude のモデルを差し替え可能。Fable のトークン切れ時は `"planningAgent": "codexSol"` で設計・レビューを Codex（`gpt-5.6-sol`）に切り替えられる
+- 初回設計・初回フルレビューは `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
 
 ## babysit（open PR の見張り）
 

@@ -2,6 +2,7 @@ import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
 import { safeRef } from "../git-ref";
+import { resolveEfficiencyAgent } from "../efficiency-agent";
 import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 
 export type Severity = "critical" | "high" | "medium" | "low";
@@ -23,6 +24,14 @@ export function isBlocking(f: Finding): boolean {
 
 export function assignIds(findings: Finding[], round: number): Finding[] {
   return findings.map((f, i) => ({ ...f, id: f.id ?? `R${round}-${i + 1}` }));
+}
+
+export function partitionBlocking(findings: Finding[]): { lintable: Finding[]; structural: Finding[] } {
+  const blocking = findings.filter(isBlocking);
+  return {
+    lintable: blocking.filter((f) => f.lintable),
+    structural: blocking.filter((f) => !f.lintable),
+  };
 }
 
 // headless claude は Bash 実行許可を持たないため diff はパイプライン側で取得して埋め込む
@@ -118,14 +127,11 @@ export function parseFollowupOutput(output: string): FollowupResult {
 
 export async function runFollowupReview(deps: ReviewDeps, outstanding: Finding[]): Promise<FollowupResult> {
   const diff = await getDiff(deps);
-  const agent = resolvePlanningAgent(deps.config);
+  const agent = resolveEfficiencyAgent(deps.config, "followupReview");
   const output = await deps.agent(
     agent,
     buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding),
-    {
-      cwd: deps.cwd,
-      model: planningModelOption(deps.config, agent),
-    },
+    { cwd: deps.cwd },
   );
   return parseFollowupOutput(output);
 }

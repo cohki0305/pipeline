@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
-import { loadDesign, parseDesignOutput, runDesign } from "./design";
+import {
+  buildDesignRevisionPrompt,
+  loadDesign,
+  nextRevision,
+  parseDesignOutput,
+  reviseDesignFromReview,
+  runDesign,
+} from "./design";
 
 const CONFIG = {
   commands: { lint: "l", typecheck: "tc", test: "t" },
@@ -106,5 +113,47 @@ describe("runDesign", () => {
       { number: 143, title: "直す", body: "本文" },
       "2026-07-19",
     );
+  });
+});
+
+describe("nextRevision", () => {
+  test("revision がなければ 2、あれば +1", () => {
+    expect(nextRevision(DOC)).toBe(2);
+    expect(nextRevision(`---\ncomplexity: simple\nrevision: 2\n---\n`)).toBe(3);
+  });
+});
+
+describe("buildDesignRevisionPrompt", () => {
+  test("現行計画と指摘を含む", () => {
+    const p = buildDesignRevisionPrompt(DOC, [{ file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false }], 2);
+    expect(p).toContain("現行の実装計画");
+    expect(p).toContain("revision: 2");
+    expect(p).toContain("直せ");
+  });
+});
+
+describe("reviseDesignFromReview", () => {
+  test("設計担当を呼び、同じ docPath に上書きする", async () => {
+    const written: { path: string; content: string }[] = [];
+    const revised = `---\ncomplexity: simple\nrevision: 2\n---\n\n# 更新`;
+    const result = await reviseDesignFromReview(
+      {
+        agent: async (agent, prompt) => {
+          expect(agent).toBe("composerFast");
+          expect(prompt).toContain("現行の実装計画");
+          return revised;
+        },
+        cwd: "/work",
+        config: CONFIG,
+        writeFile: async (path, content) => {
+          written.push({ path, content });
+        },
+      },
+      { complexity: "simple", docPath: "docs/plans/x.md", docContent: DOC },
+      [{ file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false }],
+    );
+    expect(result.docPath).toBe("docs/plans/x.md");
+    expect(result.docContent).toContain("revision: 2");
+    expect(written[0]!.path).toBe("/work/docs/plans/x.md");
   });
 });

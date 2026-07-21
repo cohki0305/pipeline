@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildFixPrompt, implementerFor, runImplement } from "./implement";
+import { buildFixPrompt, buildRevisionImplementPrompt, implementerFor, runImplement, runImplementRevision } from "./implement";
 
 describe("implementerFor", () => {
   test("simple は composer、complex は codexSol", () => {
@@ -31,5 +31,28 @@ describe("runImplement", () => {
     );
     expect(calls[0]!.agent).toBe("codexSol");
     expect(calls[0]!.prompt).toContain("# 計画");
+  });
+});
+
+describe("runImplementRevision", () => {
+  test("更新計画を実装担当に渡す", async () => {
+    const calls: { agent: string; prompt: string }[] = [];
+    await runImplementRevision(
+      {
+        agent: async (agent, prompt) => {
+          calls.push({ agent, prompt });
+          return "";
+        },
+        cwd: "/work",
+      },
+      { complexity: "simple", docContent: "# 更新計画" },
+    );
+    expect(calls[0]!.prompt).toContain("更新された実装計画");
+  });
+});
+
+describe("buildRevisionImplementPrompt", () => {
+  test("既存コードへの反映を指示する", () => {
+    expect(buildRevisionImplementPrompt("# x")).toContain("既存コードへ変更を反映");
   });
 });

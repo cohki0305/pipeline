@@ -39,3 +39,14 @@ export async function runQualityGate(deps: {
   }
   return { ok: true, violations: [], raw: "" };
 }
+
+export async function runAutoFixLint(deps: {
+  exec: Exec;
+  cwd: string;
+  config: PipelineConfig;
+}): Promise<boolean> {
+  const cmd = deps.config.autoFixCommands?.lint;
+  if (!cmd) return false;
+  const r = await deps.exec(cmd, { cwd: deps.cwd });
+  return r.code === 0;
+}

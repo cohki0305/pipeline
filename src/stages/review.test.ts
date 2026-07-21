@@ -8,6 +8,7 @@ import {
   isBlocking,
   parseFindings,
   parseFollowupOutput,
+  partitionBlocking,
   runFollowupReview,
   runReview,
 } from "./review";
@@ -110,6 +111,20 @@ describe("assignIds", () => {
   });
 });
 
+describe("partitionBlocking", () => {
+  test("blocking を lintable と structural に分ける", () => {
+    const findings = [
+      { file: "a.ts", line: 1, severity: "high", message: "lint", lintable: true },
+      { file: "b.ts", line: 2, severity: "high", message: "設計", lintable: false },
+      { file: "c.ts", line: 3, severity: "low", message: "low", lintable: true },
+    ] as Finding[];
+    expect(partitionBlocking(findings)).toEqual({
+      lintable: [findings[0]],
+      structural: [findings[1]],
+    });
+  });
+});
+
 describe("消し込みレビュー", () => {
   const OUTSTANDING = [{ ...FINDING, id: "R1-1" } as Finding];
 
@@ -138,7 +153,7 @@ describe("消し込みレビュー", () => {
       {
         exec: async () => ({ code: 0, stdout: "diff --git a/x", stderr: "" }),
         agent: async (agent, prompt) => {
-          expect(agent).toBe("claude");
+          expect(agent).toBe("composerFast");
           expect(prompt).toContain("R1-1");
           return '{"fixed": ["R1-1"], "remaining": []}';
         },

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
+import { PIPELINE_STATE_FILE } from "./pipeline-state";
 import { LoopExceededError, runPipeline } from "./run";
 
 const CONFIG = {
@@ -11,14 +12,14 @@ const CONFIG = {
   worktreeRoot: "/wt",
 } satisfies PipelineConfig;
 
-const DESIGN = (c: "simple" | "complex") => `---\ncomplexity: ${c}\n---\n# 計画`;
+const DESIGN = (c: "simple" | "complex", revision?: number) =>
+  `---\ncomplexity: ${c}${revision ? `\nrevision: ${revision}` : ""}\n---\n# 計画`;
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
 
 const findingsOf = (n: number, severity = "high") =>
   JSON.stringify(
     Array.from({ length: n }, (_, i) => ({ file: `app/f${i}.ts`, line: 1, severity, message: `指摘 ${i}`, lintable: false })),
   );
-// 2 巡目以降の消し込みレビューの応答
 const followupOf = (n: number) =>
   JSON.stringify({
     fixed: [],
@@ -32,22 +33,31 @@ const followupOf = (n: number) =>
     })),
   });
 
-type Harness = ReturnType<typeof makeHarness>;
-
 function makeHarness(opts: {
   complexity: "simple" | "complex";
   reviewOutputs?: string[];
   gateFailures?: { cmd: string; stdout: string; times: number }[];
   worktreeExists?: boolean;
+  existingDesignDoc?: string;
+  pipelineState?: string;
+  mode?: "resume" | "fresh";
+  autoFixCommands?: { lint?: string };
 }) {
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
   const written: { path: string; content: string }[] = [];
+  const fileStore: Record<string, string> = {};
+  if (opts.existingDesignDoc) {
+    fileStore[`/wt/issue-143/${opts.existingDesignDoc}`] = DESIGN(opts.complexity);
+  }
+  if (opts.pipelineState) {
+    fileStore[`/wt/issue-143/${PIPELINE_STATE_FILE}`] = opts.pipelineState;
+  }
   const reviews = [...(opts.reviewOutputs ?? ["[]"])];
   const failures = (opts.gateFailures ?? []).map((f) => ({ ...f }));
 
   const deps = {
-    config: CONFIG,
+    config: { ...CONFIG, autoFixCommands: opts.autoFixCommands },
     exec: async (cmd: string): Promise<ExecResult> => {
       execCalls.push(cmd);
       if (cmd.startsWith("test -d")) return { code: opts.worktreeExists ? 0 : 1, stdout: "", stderr: "" };
@@ -56,15 +66,17 @@ function makeHarness(opts: {
         f.times--;
         return { code: 1, stdout: f.stdout, stderr: "" };
       }
+      if (cmd === opts.autoFixCommands?.lint) return OK;
       if (cmd.startsWith("gh pr create")) return { code: 0, stdout: "https://pr/1\n", stderr: "" };
       return OK;
     },
     agent: async (agent: string, prompt: string) => {
       agentCalls.push({ agent, prompt });
-      if (agent !== "claude") return "";
-      // 設計プロンプトだけが complexity という語を含む
-      if (prompt.includes("complexity")) return DESIGN(opts.complexity);
-      return reviews.shift() ?? "[]";
+      if (prompt.includes("現行の実装計画")) return DESIGN(opts.complexity, 2);
+      if (prompt.includes("complexity の判断基準")) return DESIGN(opts.complexity);
+      if (prompt.includes("指摘せよ")) return reviews.shift() ?? "[]";
+      if (prompt.includes('"remaining"')) return reviews.shift() ?? '{"fixed": [], "remaining": []}';
+      return "";
     },
     github: {
       fetchIssue: async () => ({ number: 143, title: "直す", body: "本文" }),
@@ -74,11 +86,23 @@ function makeHarness(opts: {
     log: () => {},
     writeFile: async (path: string, content: string) => {
       written.push({ path, content });
+      fileStore[path] = content;
     },
-    readFile: async () => DESIGN(opts.complexity),
+    readFile: async (path: string) => {
+      if (fileStore[path] !== undefined) return fileStore[path];
+      if (path.endsWith("my-design.md")) return DESIGN(opts.complexity);
+      throw new Error(`ENOENT: ${path}`);
+    },
+    readdir: async (dir: string) => {
+      if (dir === "docs/plans" && opts.existingDesignDoc) return [opts.existingDesignDoc.split("/").pop()!];
+      return [];
+    },
+    unlink: async (path: string) => {
+      delete fileStore[path];
+    },
     date: "2026-07-19",
   };
-  return { deps: deps as never, agentCalls, execCalls, written };
+  return { deps: deps as never, agentCalls, execCalls, written, fileStore };
 }
 
 describe("runPipeline", () => {
@@ -89,20 +113,19 @@ describe("runPipeline", () => {
     const implementCall = h.agentCalls[1]!;
     expect(implementCall.agent).toBe("composer");
     expect(h.execCalls).toContain("run-lint");
-    // ローカル main の鮮度に依存しないよう、fetch した origin/<base> を基準に worktree を切る
     expect(h.execCalls).toContain("git fetch origin main");
     expect(h.execCalls).toContain('git worktree add "/wt/issue-143" -b issue-143 origin/main');
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
 
-  test("lint 失敗は complex でも composer が修正する", async () => {
+  test("lint 失敗は composerFast が修正する", async () => {
     const h = makeHarness({
       complexity: "complex",
       gateFailures: [{ cmd: "run-lint", stdout: "app/a.ts:1 x", times: 1 }],
     });
     await runPipeline(h.deps, 143);
     const fixCall = h.agentCalls.find((c) => c.prompt.includes("lint/型エラー"));
-    expect(fixCall!.agent).toBe("composer");
+    expect(fixCall!.agent).toBe("composerFast");
   });
 
   test("test 失敗は実装担当（complex なら codexSol）が修正する", async () => {
@@ -123,18 +146,41 @@ describe("runPipeline", () => {
     expect(runPipeline(h.deps, 143)).rejects.toThrow(LoopExceededError);
   });
 
-  test("レビュー指摘は実装担当が直し、消し込みレビューがクリーンなら PR に進む", async () => {
+  test("レビュー指摘は設計書更新経由で実装担当が直す", async () => {
     const h = makeHarness({
       complexity: "simple",
       reviewOutputs: [findingsOf(1), '{"fixed": ["R1-1"], "remaining": []}'],
     });
     await runPipeline(h.deps, 143);
-    const fixCall = h.agentCalls.find((c) => c.prompt.includes("コードレビュー指摘"));
-    expect(fixCall!.agent).toBe("composer");
-    const claudeCalls = h.agentCalls.filter((c) => c.agent === "claude");
-    const followupCall = claudeCalls[claudeCalls.length - 1]!;
-    expect(followupCall.prompt).toContain("R1-1");
-    expect(followupCall.prompt).toContain('"remaining"');
+    expect(h.agentCalls.some((c) => c.prompt.includes("指摘リストを修正"))).toBe(false);
+    const revisionCall = h.agentCalls.find((c) => c.prompt.includes("現行の実装計画"));
+    expect(revisionCall?.agent).toBe("composerFast");
+    const implementCall = h.agentCalls.find((c) => c.prompt.includes("更新された実装計画"));
+    expect(implementCall!.agent).toBe("composer");
+  });
+
+  test("lintable blocking 指摘は設計ループを bypass する", async () => {
+    const lintableFinding = JSON.stringify([
+      { file: "app/a.ts", line: 1, severity: "high", message: "規約違反", lintable: true },
+    ]);
+    const h = makeHarness({
+      complexity: "simple",
+      reviewOutputs: [lintableFinding, '{"fixed": ["R1-1"], "remaining": []}'],
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
+    expect(h.agentCalls.some((c) => c.agent === "composerFast" && c.prompt.includes("静的解析可能"))).toBe(true);
+  });
+
+  test("lint 自動修正後にゲートが通れば composer を呼ばない", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      autoFixCommands: { lint: "run-lint-fix" },
+      gateFailures: [{ cmd: "run-lint", stdout: "app/a.ts:1 x", times: 1 }],
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.execCalls).toContain("run-lint-fix");
+    expect(h.agentCalls.some((c) => c.prompt.includes("lint/型エラー"))).toBe(false);
   });
 
   test("指摘件数が減らなくなったら LoopExceededError（停滞検知）", async () => {
@@ -149,8 +195,9 @@ describe("runPipeline", () => {
     });
     const result = await runPipeline(h.deps, 143);
     expect(result.prUrl).toBe("https://pr/1");
-    const fixes = h.agentCalls.filter((c) => c.prompt.includes("コードレビュー指摘"));
-    expect(fixes).toHaveLength(3);
+    const revisions = h.agentCalls.filter((c) => c.prompt.includes("現行の実装計画"));
+    expect(revisions).toHaveLength(3);
+    expect(revisions.every((c) => c.agent === "composerFast")).toBe(true);
   });
 
   test("減り続けてもラウンド上限で LoopExceededError", async () => {
@@ -161,22 +208,62 @@ describe("runPipeline", () => {
     expect(runPipeline(h.deps, 143)).rejects.toThrow("ラウンド上限");
   });
 
-  test("--design 指定時は設計ステージの claude 呼び出しを省略する", async () => {
+  test("--design 指定時は issue からの設計 claude 呼び出しを省略する", async () => {
     const h = makeHarness({ complexity: "simple" });
     const result = await runPipeline(h.deps, 143, { designDocPath: "/home/user/my-design.md" });
     expect(result.prUrl).toBe("https://pr/1");
-    const claudeCalls = h.agentCalls.filter((c) => c.agent === "claude");
-    expect(claudeCalls).toHaveLength(1);
-    expect(claudeCalls[0]!.prompt).not.toContain("complexity");
+    const designCalls = h.agentCalls.filter((c) => c.prompt.includes("complexity の判断基準"));
+    expect(designCalls).toHaveLength(0);
     const design = h.written.find((w) => w.path.includes("docs/plans/2026-07-19-issue-143.md"));
     expect(design!.content).toContain("complexity: simple");
+  });
+
+  test("resume: worktree に設計書があれば issue からの設計をスキップする", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+    });
+    await runPipeline(h.deps, 143);
+    const designCalls = h.agentCalls.filter((c) => c.prompt.includes("complexity の判断基準"));
+    expect(designCalls).toHaveLength(0);
+    const implementCall = h.agentCalls.find((c) => c.agent === "composer" && c.prompt.includes("実装計画"));
+    expect(implementCall).toBeDefined();
+  });
+
+  test("resume: 実装済みなら品質ゲートから再開する", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+      pipelineState: JSON.stringify({
+        issue: 143,
+        design: { docPath: "docs/plans/2026-07-18-issue-143.md", complexity: "simple" },
+        implement: true,
+      }),
+    });
+    await runPipeline(h.deps, 143);
+    const implementCalls = h.agentCalls.filter((c) => c.prompt.includes("実装計画に従って実装"));
+    expect(implementCalls).toHaveLength(0);
+    expect(h.execCalls).toContain("run-lint");
+  });
+
+  test("fresh: 設計書があっても issue から設計し直す", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+    });
+    await runPipeline(h.deps, 143, { mode: "fresh" });
+    const designCalls = h.agentCalls.filter((c) => c.prompt.includes("complexity の判断基準"));
+    expect(designCalls).toHaveLength(1);
   });
 
   test("low のみの指摘は修正ループを回さず PR まで進み、レポートに残る", async () => {
     const h = makeHarness({ complexity: "simple", reviewOutputs: [findingsOf(2, "low")] });
     const result = await runPipeline(h.deps, 143);
     expect(result.prUrl).toBe("https://pr/1");
-    expect(h.agentCalls.some((c) => c.prompt.includes("コードレビュー指摘"))).toBe(false);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
     const report = h.written.find((w) => w.path.includes("docs/runs/issue-143.md"));
     expect(report!.content).toContain("未対応の low 指摘");
   });
@@ -201,7 +288,7 @@ describe("runPipeline", () => {
     expect(runPipeline(h.deps, 143)).rejects.toThrow("コミットに失敗");
   });
 
-  test("ループ上限で中断してもレポートが書かれ、エラーに worktree パスが載る", async () => {
+  test("ループ上限で中断してもレポートと state が書かれる", async () => {
     const h = makeHarness({
       complexity: "simple",
       gateFailures: [{ cmd: "run-lint", stdout: "app/a.ts:1 x", times: 99 }],
@@ -230,12 +317,11 @@ describe("runPipeline", () => {
     const orig = deps.exec;
     let lintCalls = 0;
     deps.exec = async (cmd: string) => {
-      // 2 回目の lint（= レビュー修正後の再ゲート）だけ失敗させる
       if (cmd === "run-lint" && ++lintCalls === 2) return { code: 1, stdout: "app/b.ts:1 broken", stderr: "" };
       return orig(cmd);
     };
     await runPipeline(h.deps, 143);
-    const lintFixes = h.agentCalls.filter((c) => c.agent === "composer" && c.prompt.includes("lint/型エラー"));
+    const lintFixes = h.agentCalls.filter((c) => c.agent === "composerFast" && c.prompt.includes("lint/型エラー"));
     expect(lintFixes).toHaveLength(1);
     expect(lintCalls).toBeGreaterThanOrEqual(3);
   });

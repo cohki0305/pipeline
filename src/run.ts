@@ -2,15 +2,25 @@ import type { AgentName, AgentRunner } from "./agents";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
 import type { Github } from "./github";
+import { resolveEfficiencyAgent } from "./efficiency-agent";
 import { safeRef } from "./git-ref";
+import {
+  PIPELINE_STATE_FILE,
+  clearPipelineState,
+  findIssueDesignDoc,
+  loadPipelineState,
+  resolveResumePlan,
+  savePipelineState,
+  type PipelineMode,
+  type PipelineState,
+} from "./pipeline-state";
 import { RunReport } from "./report";
-import { loadDesign, runDesign } from "./stages/design";
-import { buildFixPrompt, implementerFor, runImplement } from "./stages/implement";
-import { runQualityGate } from "./stages/quality-gate";
-import { type Finding, assignIds, isBlocking, runFollowupReview, runReview } from "./stages/review";
+import { loadDesign, loadExistingDesign, reviseDesignFromReview, runDesign } from "./stages/design";
+import { buildFixPrompt, buildLintableReviewFixPrompt, implementerFor, runImplement, runImplementRevision } from "./stages/implement";
+import { runAutoFixLint, runQualityGate } from "./stages/quality-gate";
+import { type Finding, assignIds, isBlocking, partitionBlocking, runFollowupReview, runReview } from "./stages/review";
 
 const MAX_GATE_FIXES = 3;
-// レビューは件数が減り続ける限り継続する。1 ラウンド = claude レビュー + 修正なので上限は低めに抑える
 const MAX_REVIEW_ROUNDS = 3;
 
 export class LoopExceededError extends Error {
@@ -31,27 +41,28 @@ export type Deps = {
   log(msg: string): void;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string>;
+  readdir(dir: string): Promise<string[]>;
+  unlink(path: string): Promise<void>;
   date: string;
 };
 
-export type PipelineOptions = { designDocPath?: string };
+export type PipelineOptions = {
+  designDocPath?: string;
+  mode?: PipelineMode;
+};
 
 async function setupWorktree(deps: Deps, issueNumber: number): Promise<string> {
   const branch = `issue-${issueNumber}`;
   const path = `${deps.config.worktreeRoot}/${branch}`;
-  // リトライ時は既存 worktree を再利用する
   const exists = await deps.exec(`test -d "${path}"`, { cwd: deps.projectRoot });
   if (exists.code === 0) return path;
-  // ディレクトリだけ消された残骸があると add が失敗するため先に掃除する
   await deps.exec("git worktree prune", { cwd: deps.projectRoot });
-  // ローカル checkout の鮮度に依存しないよう、必ず fetch 済みの origin/<base> を基準にする
   const base = safeRef(deps.config.baseBranch);
   await deps.exec(`git fetch origin ${base}`, { cwd: deps.projectRoot });
   const r = await deps.exec(`git worktree add "${path}" -b ${branch} origin/${base}`, {
     cwd: deps.projectRoot,
   });
   if (r.code !== 0) {
-    // 前回実行の branch が残っている場合は -b なしで attach する
     const retry = await deps.exec(`git worktree add "${path}" ${branch}`, { cwd: deps.projectRoot });
     if (retry.code !== 0) throw new Error(`worktree 作成に失敗: ${r.stderr}\n${retry.stderr}`);
   }
@@ -63,7 +74,6 @@ async function setupWorktree(deps: Deps, issueNumber: number): Promise<string> {
 }
 
 export async function commitAll(deps: { exec: Exec }, cwd: string, message: string): Promise<void> {
-  // 品質ゲート通過後なので hooks は再実行しない。変更ゼロ（diff --cached --quiet が 0）は成功扱い
   const r = await deps.exec(`git add -A && { git diff --cached --quiet || git commit --no-verify -m "$COMMIT_MSG"; }`, {
     cwd,
     env: { COMMIT_MSG: message },
@@ -78,10 +88,80 @@ export async function passQualityGate(deps: GateDeps, cwd: string, implementer: 
     const gate = await runQualityGate({ ...deps, cwd });
     if (gate.ok) return attempt;
     if (attempt >= MAX_GATE_FIXES) throw new LoopExceededError("品質ゲート", gate.raw.slice(-3000));
-    const fixer = gate.kind === "test" ? implementer : "composer";
+
+    if (gate.kind === "lint" && deps.config.autoFixCommands?.lint) {
+      deps.log("lint 自動修正を試行");
+      const fixed = await runAutoFixLint({ ...deps, cwd });
+      if (fixed) {
+        const retry = await runQualityGate({ ...deps, cwd });
+        if (retry.ok) return attempt;
+      }
+    }
+
+    const fixer = gate.kind === "test" ? implementer : resolveEfficiencyAgent(deps.config, "gateFix");
     deps.log(`品質ゲート違反 (${gate.kind}) → ${fixer} が修正 (${attempt + 1}/${MAX_GATE_FIXES})`);
     await deps.agent(fixer, buildFixPrompt(gate.kind ?? "lint", JSON.stringify(gate.violations, null, 2)), { cwd });
   }
+}
+
+function pipelineStatePath(cwd: string): string {
+  return `${cwd}/${PIPELINE_STATE_FILE}`;
+}
+
+async function persistState(deps: Deps, cwd: string, state: PipelineState): Promise<void> {
+  await savePipelineState(deps, pipelineStatePath(cwd), state);
+}
+
+type DesignDeps = Pick<Deps, "agent" | "config" | "cwd" | "readFile" | "writeFile" | "readdir" | "log" | "date"> & {
+  cwd: string;
+};
+
+async function acquireDesign(
+  deps: DesignDeps,
+  issue: Awaited<ReturnType<Github["fetchIssue"]>>,
+  plan: ReturnType<typeof resolveResumePlan>,
+  options: PipelineOptions,
+): Promise<Awaited<ReturnType<typeof runDesign>>> {
+  if (options.designDocPath) {
+    return loadDesign(deps, issue, deps.date, options.designDocPath);
+  }
+  if (plan.skipDesign && plan.designDocPath) {
+    deps.log(`設計をスキップ（既存: ${plan.designDocPath}）`);
+    return loadExistingDesign(deps, plan.designDocPath);
+  }
+  return runDesign(deps, issue, deps.date);
+}
+
+async function applyReviewFindings(
+  deps: Deps,
+  cwd: string,
+  design: Awaited<ReturnType<typeof runDesign>>,
+  blocking: Finding[],
+  implementer: AgentName,
+): Promise<Awaited<ReturnType<typeof runDesign>>> {
+  const { lintable, structural } = partitionBlocking(blocking);
+  if (lintable.length > 0) {
+    const fixer = resolveEfficiencyAgent(deps.config, "lintableFix");
+    deps.log(`lintable 指摘 ${lintable.length} 件 → ${fixer} が直接修正（設計ループ bypass）`);
+    await deps.agent(fixer, buildLintableReviewFixPrompt(JSON.stringify(lintable, null, 2)), { cwd });
+  }
+  if (structural.length > 0) {
+    design = await reviseAndImplement(deps, cwd, design, structural, implementer);
+  }
+  return design;
+}
+
+async function reviseAndImplement(
+  deps: Deps,
+  cwd: string,
+  design: Awaited<ReturnType<typeof runDesign>>,
+  findings: Finding[],
+  implementer: AgentName,
+): Promise<Awaited<ReturnType<typeof runDesign>>> {
+  const revised = await reviseDesignFromReview({ ...deps, cwd }, design, findings);
+  deps.log(`レビュー指摘 ${findings.length} 件 → 設計書を更新 → ${implementer} が実装`);
+  await runImplementRevision({ agent: deps.agent, cwd }, revised);
+  return revised;
 }
 
 export async function runPipeline(
@@ -89,69 +169,124 @@ export async function runPipeline(
   issueNumber: number,
   options: PipelineOptions = {},
 ): Promise<{ prUrl: string; reportPath: string }> {
+  const mode = options.mode ?? "resume";
   const report = new RunReport(issueNumber, deps.date);
   const issue = await deps.github.fetchIssue(deps.projectRoot, issueNumber);
   const cwd = await setupWorktree(deps, issueNumber);
   const reportPath = `${deps.config.reportDir}/issue-${issueNumber}.md`;
+  const stateFile = pipelineStatePath(cwd);
   deps.log(`worktree: ${cwd}`);
+
+  if (mode === "fresh") await clearPipelineState(deps, stateFile);
+
+  let state = await loadPipelineState(deps, stateFile, issueNumber);
+  const inferredDesign = await findIssueDesignDoc(deps.readdir, deps.config.designDocDir, issueNumber);
+  let plan = resolveResumePlan(mode, state, inferredDesign);
 
   let design: Awaited<ReturnType<typeof runDesign>>;
   try {
-    design = options.designDocPath
-      ? await loadDesign({ ...deps, cwd }, issue, deps.date, options.designDocPath)
-      : await runDesign({ ...deps, cwd }, issue, deps.date);
+    design = await acquireDesign({ ...deps, cwd }, issue, plan, options);
+    state = {
+      ...state,
+      design: { docPath: design.docPath, complexity: design.complexity },
+    };
+    await persistState(deps, cwd, state);
+
     const implementer = implementerFor(design.complexity);
-    report.addStage("設計", `complexity: ${design.complexity} / ${design.docPath}`);
-    deps.log(`設計完了 (complexity: ${design.complexity} → ${implementer})`);
+    if (!plan.skipDesign || options.designDocPath) {
+      report.addStage("設計", `complexity: ${design.complexity} / ${design.docPath}`);
+    }
+    deps.log(`設計 (${design.complexity} → ${implementer})`);
 
-    await runImplement({ ...deps, cwd }, design);
-    report.addStage("実装", `担当: ${implementer}`);
+    if (!plan.skipImplement && !plan.resumeReview) {
+      await runImplement({ agent: deps.agent, cwd }, design);
+      report.addStage("実装", `担当: ${implementer}`);
+      state = { ...state, implement: true };
+      await persistState(deps, cwd, state);
+    } else if (plan.skipImplement) {
+      deps.log("実装をスキップ（前回の変更を再利用）");
+    }
 
-    const gateFixes = await passQualityGate(deps, cwd, implementer);
-    report.addStage("品質ゲート", `${gateFixes} 回の修正で通過`);
-    await commitAll(deps, cwd, `issue #${issueNumber}: ${issue.title}`);
+    if (!plan.skipQualityGateInitial) {
+      const gateFixes = await passQualityGate(deps, cwd, implementer);
+      report.addStage("品質ゲート", `${gateFixes} 回の修正で通過`);
+      await commitAll(deps, cwd, `issue #${issueNumber}: ${issue.title}`);
+      state = { ...state, initialCommit: true, qualityGateInitial: { fixAttempts: gateFixes }, review: undefined };
+      await persistState(deps, cwd, state);
+      plan = { ...plan, skipQualityGateInitial: true, resumeReview: false };
+    }
 
-    // 初回はフルレビュー、2 巡目以降は前回指摘の消し込み + 修正が持ち込んだ新規問題のみ
     let outstanding: Finding[] = [];
     let prevBlocking = Number.POSITIVE_INFINITY;
+    let resumeFollowup = false;
+
+    if (plan.resumeReview && plan.outstanding?.length) {
+      design = await applyReviewFindings(deps, cwd, design, plan.outstanding, implementer);
+      await passQualityGate(deps, cwd, implementer);
+      await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
+      outstanding = plan.outstanding;
+      prevBlocking = outstanding.length;
+      state = { ...state, review: undefined };
+      await persistState(deps, cwd, state);
+      resumeFollowup = true;
+      deps.log("レビュー再開（未反映の指摘を設計→実装で処理済み）");
+    }
+
     for (let round = 0; ; round++) {
       let current: Finding[];
-      if (round === 0) {
+      if (resumeFollowup) {
+        resumeFollowup = false;
+        const followup = await runFollowupReview({ ...deps, cwd }, outstanding);
+        deps.log(`消し込みレビュー: ${followup.fixed.length} 件解消 (${followup.fixed.join(", ")})`);
+        current = assignIds(followup.remaining, round + 1);
+      } else if (round === 0) {
         current = assignIds(await runReview({ ...deps, cwd }), round + 1);
       } else {
         const followup = await runFollowupReview({ ...deps, cwd }, outstanding);
         deps.log(`消し込みレビュー: ${followup.fixed.length} 件解消 (${followup.fixed.join(", ")})`);
         current = assignIds(followup.remaining, round + 1);
       }
+
       for (const f of current.filter((f) => f.lintable)) {
         report.addLintCandidate({ file: f.file, message: f.message });
       }
       const lows = current.filter((f) => !isBlocking(f));
       for (const f of lows) report.addLowFinding({ file: f.file, message: f.message });
       const blocking = current.filter(isBlocking);
+
       if (blocking.length === 0) {
         report.addStage("レビュー", `${round} 回の修正でクリーン（low ${lows.length} 件はレポート送り）`);
+        state = { ...state, review: undefined };
+        await persistState(deps, cwd, state);
         break;
       }
       if (blocking.length >= prevBlocking) {
+        state = { ...state, review: { round: round + 1, outstanding: blocking } };
+        await persistState(deps, cwd, state);
         throw new LoopExceededError(
           "レビュー",
           `指摘件数が減っていません（前回 ${prevBlocking} 件 → 今回 ${blocking.length} 件）:\n${JSON.stringify(blocking, null, 2)}`,
         );
       }
       if (round >= MAX_REVIEW_ROUNDS) {
+        state = { ...state, review: { round: round + 1, outstanding: blocking } };
+        await persistState(deps, cwd, state);
         throw new LoopExceededError("レビュー", `ラウンド上限 ${MAX_REVIEW_ROUNDS} に達しました:\n${JSON.stringify(blocking, null, 2)}`);
       }
+
       prevBlocking = blocking.length;
       outstanding = blocking;
-      deps.log(`レビュー指摘 ${blocking.length} 件（low ${lows.length} 件はレポート送り）→ ${implementer} が修正 (round ${round + 1})`);
-      await deps.agent(implementer, buildFixPrompt("review", JSON.stringify(blocking, null, 2)), { cwd });
-      // レビュー修正が規約違反やテスト破壊を持ち込むことがあるため、必ず再ゲートしてからコミットする
+      state = { ...state, review: { round: round + 1, outstanding: blocking } };
+      await persistState(deps, cwd, state);
+
+      design = await applyReviewFindings(deps, cwd, design, blocking, implementer);
+      state = { ...state, design: { docPath: design.docPath, complexity: design.complexity } };
+      await persistState(deps, cwd, state);
+
       await passQualityGate(deps, cwd, implementer);
-      await commitAll(deps, cwd, `issue #${issueNumber}: レビュー指摘を修正`);
+      await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
     }
   } catch (e) {
-    // 中断しても進捗と lint 化候補を worktree 内に残す（コミットはしない）
     report.addStage("中断", e instanceof Error ? e.message.slice(0, 500) : String(e));
     await deps.writeFile(`${cwd}/${reportPath}`, report.render());
     if (e instanceof LoopExceededError) {
