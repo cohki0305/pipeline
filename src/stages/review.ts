@@ -54,6 +54,7 @@ export async function runReview(deps: ReviewDeps): Promise<Finding[]> {
   const diff = await getDiff(deps);
   const output = await deps.agent("claude", buildReviewPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff), {
     cwd: deps.cwd,
+    model: deps.config.reviewModel,
   });
   return parseFindings(output);
 }
@@ -117,6 +118,7 @@ export async function runFollowupReview(deps: ReviewDeps, outstanding: Finding[]
   const diff = await getDiff(deps);
   const output = await deps.agent("claude", buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding), {
     cwd: deps.cwd,
+    model: deps.config.reviewModel,
   });
   return parseFollowupOutput(output);
 }

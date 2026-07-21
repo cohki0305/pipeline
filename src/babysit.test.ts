@@ -21,11 +21,16 @@ function makeDeps(opts: {
   mergeFails?: boolean;
   lastCommit?: string;
   babysitBranches?: string[];
+  babysitAuthors?: string[];
 }) {
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
   const deps = {
-    config: opts.babysitBranches ? { ...CONFIG, babysitBranches: opts.babysitBranches } : CONFIG,
+    config: {
+      ...CONFIG,
+      ...(opts.babysitBranches ? { babysitBranches: opts.babysitBranches } : {}),
+      ...(opts.babysitAuthors ? { babysitAuthors: opts.babysitAuthors } : {}),
+    },
     exec: async (cmd: string): Promise<ExecResult> => {
       execCalls.push(cmd);
       if (cmd.startsWith("test -d")) return OK;
@@ -55,7 +60,7 @@ function makeDeps(opts: {
   return { deps: deps as never, agentCalls, execCalls };
 }
 
-const PR: PrSummary = { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "MERGEABLE" };
+const PR: PrSummary = { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "MERGEABLE", author: "koki" };
 
 describe("isNewComment", () => {
   test("最終コミットより新しいコメントだけ拾う（タイムゾーン混在でも正しく比較）", () => {
@@ -184,6 +189,24 @@ describe("runBabysit", () => {
     });
     const results = await runBabysit(h.deps);
     expect(results.map((r) => r.number)).toEqual([193, 194]);
+  });
+
+  test("babysitAuthors にマッチする author の PR はブランチ名を問わずコメント対応の対象", async () => {
+    const h = makeDeps({
+      babysitAuthors: ["koki"],
+      comments: [
+        { author: "koki", authorAssociation: "OWNER", body: "直して", path: null, createdAt: "2026-07-20T05:00:00Z" },
+      ],
+      lastCommit: "2026-07-20T09:00:00+09:00",
+      prs: [
+        { number: 400, headRefName: "feature-x", baseRefName: "main", mergeable: "MERGEABLE", author: "koki" },
+        { number: 401, headRefName: "feature-y", baseRefName: "main", mergeable: "MERGEABLE", author: "someone-else" },
+      ],
+    });
+    const results = await runBabysit(h.deps);
+    // koki の PR (400) だけがコメント対応され、他人の PR (401) はブランチ非マッチで対象外
+    expect(results.map((r) => r.number)).toEqual([400]);
+    expect(results[0]!.actions).toEqual(["comments-addressed(1)"]);
   });
 
   test("コンフリクト解消は対象外ブランチの PR でも行う（コメント対応はしない）", async () => {

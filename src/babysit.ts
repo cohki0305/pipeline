@@ -170,12 +170,14 @@ const DEFAULT_EXCLUDES = ["main", "master", "develop", "release/*"];
 export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
   const patterns = deps.config.babysitBranches ?? ["issue-*"];
   const excludes = deps.config.babysitExcludeBranches ?? DEFAULT_EXCLUDES;
+  const authors = deps.config.babysitAuthors ?? [];
   const results: PrAction[] = [];
   for (const pr of await deps.github.listOpenPrs(deps.projectRoot)) {
     if (matchesBranch(excludes, pr.headRefName)) continue;
-    // コンフリクト解消は全 PR、コメント/CI 対応は babysitBranches にマッチするブランチのみ
-    const wantComments = matchesBranch(patterns, pr.headRefName);
+    // コメント/CI 対応の対象: babysitBranches にマッチするブランチ、または babysitAuthors にマッチする作成者
+    const wantComments = matchesBranch(patterns, pr.headRefName) || authors.includes(pr.author);
     const wantCi = wantComments;
+    // コンフリクト解消は全 PR（保護ブランチ除く）
     const wantConflict = pr.mergeable === "CONFLICTING";
     if (!wantComments && !wantConflict && !wantCi) continue;
     try {

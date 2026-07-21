@@ -24,6 +24,27 @@ describe("makeAgentRunner", () => {
     expect(readFileSync(promptFile, "utf8")).toBe("直して");
   });
 
+  test("model を渡すと CLAUDE_MODEL 環境変数で claude に伝える", async () => {
+    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify({ result: "ok" }) });
+    const run = makeAgentRunner(exec);
+    await run("claude", "設計して", { cwd: "/work", model: "opus" });
+    expect(calls[0]!.opts.env!.CLAUDE_MODEL).toBe("opus");
+    expect(calls[0]!.cmd).toContain("CLAUDE_MODEL");
+  });
+
+  test("model 未指定なら CLAUDE_MODEL は空文字（flag 省略）", async () => {
+    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify({ result: "ok" }) });
+    const run = makeAgentRunner(exec);
+    await run("claude", "設計して", { cwd: "/work" });
+    expect(calls[0]!.opts.env!.CLAUDE_MODEL).toBe("");
+  });
+
+  test("安全でない model 名は拒否する", async () => {
+    const { exec } = fakeExec({ code: 0, stdout: "{}" });
+    const run = makeAgentRunner(exec);
+    expect(run("claude", "x", { cwd: "/work", model: "opus; rm -rf /" })).rejects.toThrow("model");
+  });
+
   test("claude の出力は JSON の result フィールドを取り出す", async () => {
     const { exec } = fakeExec({ code: 0, stdout: JSON.stringify({ result: "設計です", cost: 1 }) });
     const run = makeAgentRunner(exec);

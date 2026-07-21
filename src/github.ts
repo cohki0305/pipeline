@@ -5,7 +5,19 @@ import { findFailedChecks, pickWorkflowRunId, trimCiLog, type StatusCheck } from
 import type { Exec } from "./exec";
 
 export type Issue = { number: number; title: string; body: string };
-export type PrSummary = { number: number; headRefName: string; baseRefName: string; mergeable: string };
+export type PrSummary = { number: number; headRefName: string; baseRefName: string; mergeable: string; author: string };
+
+type RawPr = { number: number; headRefName: string; baseRefName: string; mergeable: string; author?: { login?: string } };
+
+function normalizePr(raw: RawPr): PrSummary {
+  return {
+    number: raw.number,
+    headRefName: raw.headRefName,
+    baseRefName: raw.baseRefName,
+    mergeable: raw.mergeable,
+    author: raw.author?.login ?? "",
+  };
+}
 export type PrComment = { author: string; authorAssociation: string; body: string; path: string | null; createdAt: string };
 export type PrFailedCheck = Pick<StatusCheck, "name" | "conclusion" | "detailsUrl">;
 
@@ -37,14 +49,14 @@ export function makeGithub(exec: Exec): Github {
       return r.stdout.trim().split("\n").pop() ?? "";
     },
     async listOpenPrs(cwd) {
-      const r = await exec("gh pr list --state open --json number,headRefName,baseRefName,mergeable", { cwd });
+      const r = await exec("gh pr list --state open --json number,headRefName,baseRefName,mergeable,author", { cwd });
       if (r.code !== 0) throw new Error(`PR 一覧の取得に失敗: ${r.stderr}`);
-      return JSON.parse(r.stdout) as PrSummary[];
+      return (JSON.parse(r.stdout) as RawPr[]).map(normalizePr);
     },
     async getPr(cwd, num) {
-      const r = await exec(`gh pr view ${num} --json number,headRefName,baseRefName,mergeable`, { cwd });
+      const r = await exec(`gh pr view ${num} --json number,headRefName,baseRefName,mergeable,author`, { cwd });
       if (r.code !== 0) throw new Error(`PR #${num} の取得に失敗: ${r.stderr}`);
-      return JSON.parse(r.stdout) as PrSummary;
+      return normalizePr(JSON.parse(r.stdout) as RawPr);
     },
     async getPrComments(cwd, num) {
       const view = await exec(`gh pr view ${num} --json comments,reviews`, { cwd });

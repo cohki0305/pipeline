@@ -54,13 +54,14 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - 消し込み方式: 2 巡目以降のレビューは diff 全体の再レビューではなく、前回指摘リスト（id 付き）の fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加のみ
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
+- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等でモデルを差し替え可能（Fable のトークン切れ時に Opus へ切り替える等）
 
 ## babysit（open PR の見張り）
 
 プロジェクトルートで `pipeline babysit`（1 回走査）。イベント駆動の常駐監視は relay 構成で行う（下記）。
 
 - **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
-- **レビューコメント対応はブランチ単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列、リポジトリごとに設定）にマッチする PR のみ。省略時は `["issue-*"]`（パイプライン製 PR のみ）。人間ブランチを含める場合は Composer が自動 push してくることを理解した上で追加する
+- **レビューコメント/CI 対応の対象はブランチ単位 or 作成者単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列）にマッチするブランチ、または `babysitAuthors`（login 配列）にマッチする作成者の PR。`babysitBranches` 省略時は `["issue-*"]`（パイプライン製 PR のみ）。自分の PR を全部対象にしたいときは `"babysitAuthors": ["<自分の login>"]` を設定する。いずれも Composer が自動 push してくることを理解した上で追加する
 - 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
 - **CI 失敗対応も babysitBranches 対象 PR のみ**: `gh pr view --json statusCheckRollup` で失敗チェックを検知し、`gh run view <run-id> --log-failed` のログを Composer 2.5 に渡して修正 → 品質ゲート → コミット → push。relay の `check_suite` 失敗イベントでも同じ babysit が起動する
 - 自分で設定したレビュー bot（Codex クラウドレビュー等、association が NONE になる）を信頼したい場合は `.agent-pipeline.json` に `"babysitTrustedAuthors": ["chatgpt-codex-connector[bot]"]` を追加する。login の `[bot]` サフィックスは有無を問わず照合される。**その bot のコメントはコマンド実行権限を持つエージェントへのプロンプトになるため、自分の管理下にある bot だけを載せること**

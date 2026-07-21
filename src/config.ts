@@ -12,6 +12,10 @@ export type PipelineConfig = {
   babysitExcludeBranches?: string[];
   /** association に依らず信頼する投稿者 login（自分で設定したレビュー bot 等）。"[bot]" サフィックスは有無を問わない */
   babysitTrustedAuthors?: string[];
+  /** ここに載る login が作成した PR は、ブランチ名を問わずコメント/CI 対応の対象にする */
+  babysitAuthors?: string[];
+  /** 設計・レビューを行う claude のモデル上書き（例 "opus"）。未指定なら claude CLI のデフォルト */
+  reviewModel?: string;
 };
 
 const DEFAULTS = {

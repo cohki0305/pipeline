@@ -67,7 +67,10 @@ export async function runDesign(
   issue: Issue,
   date: string,
 ): Promise<DesignResult> {
-  const output = await deps.agent("claude", buildDesignPrompt(issue), { cwd: deps.cwd });
+  const output = await deps.agent("claude", buildDesignPrompt(issue), {
+    cwd: deps.cwd,
+    model: deps.config.reviewModel,
+  });
   const { complexity, content } = parseDesignOutput(output);
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;
   await deps.writeFile(`${deps.cwd}/${docPath}`, content);

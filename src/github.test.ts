@@ -29,21 +29,31 @@ describe("fetchIssue", () => {
 });
 
 describe("listOpenPrs", () => {
-  test("open PR の一覧を返す", async () => {
-    const prs = [{ number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "MERGEABLE" }];
-    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify(prs) });
-    expect(await makeGithub(exec).listOpenPrs("/repo")).toEqual(prs);
+  test("open PR の一覧を返し、author は login 文字列に正規化する", async () => {
+    const raw = [
+      { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "MERGEABLE", author: { login: "koki" } },
+    ];
+    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify(raw) });
+    expect(await makeGithub(exec).listOpenPrs("/repo")).toEqual([
+      { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "MERGEABLE", author: "koki" },
+    ]);
     expect(calls[0]!.cmd).toContain("gh pr list");
-    expect(calls[0]!.cmd).toContain("mergeable");
+    expect(calls[0]!.cmd).toContain("author");
   });
 });
 
 describe("getPr", () => {
-  test("単一 PR のサマリを返す", async () => {
-    const pr = { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "CONFLICTING" };
-    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify(pr) });
-    expect(await makeGithub(exec).getPr("/repo", 193)).toEqual(pr);
-    expect(calls[0]!.cmd).toBe("gh pr view 193 --json number,headRefName,baseRefName,mergeable");
+  test("単一 PR のサマリを返し、author を正規化する", async () => {
+    const raw = { number: 193, headRefName: "issue-153", baseRefName: "main", mergeable: "CONFLICTING", author: { login: "koki" } };
+    const { exec, calls } = fakeExec({ code: 0, stdout: JSON.stringify(raw) });
+    expect(await makeGithub(exec).getPr("/repo", 193)).toEqual({
+      number: 193,
+      headRefName: "issue-153",
+      baseRefName: "main",
+      mergeable: "CONFLICTING",
+      author: "koki",
+    });
+    expect(calls[0]!.cmd).toBe("gh pr view 193 --json number,headRefName,baseRefName,mergeable,author");
   });
 });
 
