@@ -12,7 +12,7 @@ import {
 import { LoopExceededError, runPipeline } from "./run";
 
 export type MainCommand =
-  | { cmd: "run"; issue: number; designDocPath: string | undefined }
+  | { cmd: "run"; issue: number; designDocPath: string | undefined; mode: "resume" | "fresh" }
   | { cmd: "babysit" }
   | { cmd: "babysit-pr"; pr: number }
   | { cmd: "branch"; op: "list" }
@@ -20,6 +20,11 @@ export type MainCommand =
   | { cmd: "planning-agent"; op: "list" }
   | { cmd: "planning-agent"; op: "set"; agent: "claude" | "codexSol" }
   | { cmd: "help" };
+
+function parseRunMode(args: string[]): "resume" | "fresh" {
+  if (args.includes("--fresh")) return "fresh";
+  return "resume";
+}
 
 export function parseMain(args: string[]): MainCommand {
   const [first, ...rest] = args;
@@ -43,13 +48,18 @@ export function parseMain(args: string[]): MainCommand {
   const issue = Number(first);
   if (Number.isInteger(issue) && issue > 0) {
     const i = args.indexOf("--design");
-    return { cmd: "run", issue, designDocPath: i !== -1 && args[i + 1] ? args[i + 1] : undefined };
+    return {
+      cmd: "run",
+      issue,
+      designDocPath: i !== -1 && args[i + 1] ? args[i + 1] : undefined,
+      mode: parseRunMode(args),
+    };
   }
   return { cmd: "help" };
 }
 
 const USAGE = `使い方（.agent-pipeline.json のあるプロジェクトルートで実行）:
-  pipeline <issue番号> [--design <設計書パス>]      issue を実装して PR 作成まで自動で回す
+  pipeline <issue番号> [--design <設計書パス>] [--fresh]  issue を実装して PR 作成まで自動で回す（既定は --resume）
   pipeline babysit                                  open PR を 1 回走査（コンフリクト・コメント対応）
   pipeline babysit-pr <PR番号>                      checkout 済みブランチで単一 PR を処理（CI 用）
   pipeline branch [list | add <glob> | remove <glob>]  コメント対応の対象ブランチを管理
@@ -68,6 +78,7 @@ export async function main(args: string[]): Promise<number> {
       try {
         const { prUrl, reportPath } = await runPipeline(makePipelineDeps(projectRoot), command.issue, {
           designDocPath: command.designDocPath ? resolve(command.designDocPath) : undefined,
+          mode: command.mode,
         });
         console.log(`PR 作成完了: ${prUrl}`);
         console.log(`レポート: ${reportPath}`);

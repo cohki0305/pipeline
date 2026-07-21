@@ -49,4 +49,9 @@ describe("loadConfig", () => {
     expect(loadConfig(tempProject({ ...VALID, planningAgent: "codexSol" })).planningAgent).toBe("codexSol");
     expect(loadConfig(tempProject({ ...VALID, planningAgent: "claude" })).planningAgent).toBe("claude");
   });
+
+  test("efficiencyAgents が未対応の値なら throw する", () => {
+    const dir = tempProject({ ...VALID, efficiencyAgents: { gateFix: "claude" } });
+    expect(() => loadConfig(dir)).toThrow("efficiencyAgents.gateFix");
+  });
 });

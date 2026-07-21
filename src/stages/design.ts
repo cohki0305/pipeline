@@ -1,7 +1,7 @@
-import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Issue } from "../github";
 import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
+import type { Finding } from "./review";
 
 export type Complexity = "simple" | "complex";
 export type DesignResult = { complexity: Complexity; docPath: string; docContent: string };
@@ -40,6 +40,15 @@ export function parseDesignOutput(output: string): { complexity: Complexity; con
 }
 
 // セッションで対話的に作った設計書をパイプラインに注入する経路。claude の設計呼び出しを省略する
+export async function loadExistingDesign(
+  deps: { cwd: string; readFile(path: string): Promise<string> },
+  docPath: string,
+): Promise<DesignResult> {
+  const output = await deps.readFile(`${deps.cwd}/${docPath}`);
+  const { complexity, content } = parseDesignOutput(output);
+  return { complexity, docPath, docContent: content };
+}
+
 export async function loadDesign(
   deps: {
     cwd: string;
@@ -56,6 +65,48 @@ export async function loadDesign(
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;
   await deps.writeFile(`${deps.cwd}/${docPath}`, content);
   return { complexity, docPath, docContent: content };
+}
+
+export function nextRevision(content: string): number {
+  const fm = content.trimStart().match(/^---\n([\s\S]*?)\n---/);
+  const m = fm?.[1]?.match(/revision:\s*(\d+)/);
+  return m ? Number(m[1]) + 1 : 2;
+}
+
+export function appendReviewFindings(currentContent: string, findings: Finding[]): string {
+  const ids = findings.map((finding) => finding.id ?? `${finding.file}:${finding.line ?? "?"}`).join(",");
+  const marker = `<!-- agent-pipeline-review:${ids} -->`;
+  // state 保存前にプロセスが落ちても、同じ指摘を resume した際に設計追記を重複させない。
+  if (currentContent.includes(marker)) return currentContent;
+
+  const revision = nextRevision(currentContent);
+  const withRevision = currentContent.replace(/^---\n([\s\S]*?)\n---/, (_frontmatter, body: string) => {
+    const revisedBody = /(^|\n)revision:\s*\d+/.test(body)
+      ? body.replace(/(^|\n)revision:\s*\d+/, `$1revision: ${revision}`)
+      : `${body}\nrevision: ${revision}`;
+    return `---\n${revisedBody}\n---`;
+  });
+
+  const items = findings
+    .map(
+      (finding) =>
+        `- ${finding.id ?? "(id なし)"}: ${finding.message}（${finding.file}${finding.line == null ? "" : `:${finding.line}`}）`,
+    )
+    .join("\n");
+  return `${withRevision.trimEnd()}\n\n## レビュー反映（revision ${revision}）\n\n${marker}\n${items}\n`;
+}
+
+export async function reviseDesignFromReview(
+  deps: {
+    cwd: string;
+    writeFile(path: string, content: string): Promise<void>;
+  },
+  design: DesignResult,
+  findings: Finding[],
+): Promise<DesignResult> {
+  const content = appendReviewFindings(design.docContent, findings);
+  await deps.writeFile(`${deps.cwd}/${design.docPath}`, content);
+  return { complexity: design.complexity, docPath: design.docPath, docContent: content };
 }
 
 export async function runDesign(

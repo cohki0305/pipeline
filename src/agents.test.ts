@@ -69,6 +69,7 @@ describe("AGENT_COMMANDS", () => {
     expect(AGENT_COMMANDS.claude).toContain("--output-format json");
     expect(AGENT_COMMANDS.composer).toContain("--model composer-2.5");
     expect(AGENT_COMMANDS.composer).toContain("< /dev/null");
+    expect(AGENT_COMMANDS.composerFast).toContain("composer-2.5-fast");
   });
 });
 

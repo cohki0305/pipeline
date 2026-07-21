@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Exec } from "./exec";
 
-export type AgentName = "claude" | "codexSol" | "composer";
+export type AgentName = "claude" | "codexSol" | "composer" | "composerFast";
 export type AgentOpts = { cwd: string; timeoutMs?: number; model?: string };
 export type AgentRunner = (agent: AgentName, prompt: string, opts: AgentOpts) => Promise<string>;
 
@@ -13,6 +13,7 @@ export const AGENT_COMMANDS: Record<AgentName, string> = {
   claude: 'claude -p --output-format json ${CLAUDE_MODEL:+--model $CLAUDE_MODEL} < "$PROMPT_FILE"',
   codexSol: 'codex exec -s workspace-write -m gpt-5.6-sol "$(cat "$PROMPT_FILE")" < /dev/null',
   composer: 'cursor-agent -p --model composer-2.5 -f "$(cat "$PROMPT_FILE")" < /dev/null',
+  composerFast: 'cursor-agent -p --model composer-2.5-fast -f "$(cat "$PROMPT_FILE")" < /dev/null',
 };
 
 // モデル名はシェルに補間されるため厳格に検証する

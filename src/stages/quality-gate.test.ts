@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
-import { parseViolations, runQualityGate } from "./quality-gate";
+import { parseViolations, runAutoFixLint, runQualityGate } from "./quality-gate";
 
 const CONFIG = {
   commands: { lint: "run-lint", typecheck: "run-tc", test: "run-test" },
@@ -56,5 +56,44 @@ describe("runQualityGate", () => {
   test("test 失敗は kind test（実装担当に差し戻す対象）", async () => {
     const r = await runQualityGate({ exec: execFor({ "run-test": "1 fail" }), cwd: "/w", config: CONFIG });
     expect(r).toMatchObject({ ok: false, kind: "test" });
+  });
+});
+
+describe("runAutoFixLint", () => {
+  test("autoFixCommands.lint が成功すれば true", async () => {
+    const ok = await runAutoFixLint({
+      exec: async (cmd) => ({ code: cmd === "run-lint-fix" ? 0 : 1, stdout: "", stderr: "" }),
+      cwd: "/w",
+      config: { ...CONFIG, autoFixCommands: { lint: "run-lint-fix" } },
+    });
+    expect(ok).toBe(true);
+  });
+
+  test("未設定なら false", async () => {
+    const ok = await runAutoFixLint({
+      exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+      cwd: "/w",
+      config: CONFIG,
+    });
+    expect(ok).toBe(false);
+  });
+});
+
+describe("runQualityGate incremental", () => {
+  test("増分コマンドへ変更ファイルを環境変数で渡し、未設定項目はフルコマンドへ戻る", async () => {
+    const calls: { cmd: string; files?: string }[] = [];
+    const result = await runQualityGate({
+      exec: async (cmd, opts) => {
+        calls.push({ cmd, files: opts?.env?.PIPELINE_CHANGED_FILES });
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cwd: "/w",
+      config: { ...CONFIG, incrementalCommands: { lint: "lint-changed", test: "test-changed" } },
+      scope: "incremental",
+      changedFiles: ["src/a.ts", "src/b.ts"],
+    });
+    expect(result.ok).toBe(true);
+    expect(calls.map((call) => call.cmd)).toEqual(["lint-changed", "run-tc", "test-changed"]);
+    expect(calls[0]!.files).toBe("src/a.ts\nsrc/b.ts");
   });
 });

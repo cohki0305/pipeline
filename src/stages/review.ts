@@ -2,6 +2,7 @@ import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
 import { safeRef } from "../git-ref";
+import { nextEfficiencyAgent, runEfficiencyAgent } from "../efficiency-agent";
 import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 
 export type Severity = "critical" | "high" | "medium" | "low";
@@ -25,20 +26,32 @@ export function assignIds(findings: Finding[], round: number): Finding[] {
   return findings.map((f, i) => ({ ...f, id: f.id ?? `R${round}-${i + 1}` }));
 }
 
+export function partitionBlocking(findings: Finding[]): { lintable: Finding[]; structural: Finding[] } {
+  const blocking = findings.filter(isBlocking);
+  return {
+    lintable: blocking.filter((f) => f.lintable),
+    structural: blocking.filter((f) => !f.lintable),
+  };
+}
+
 // headless claude は Bash 実行許可を持たないため diff はパイプライン側で取得して埋め込む
 const MAX_DIFF_CHARS = 50_000;
 
 type ReviewDeps = { agent: AgentRunner; exec: Exec; cwd: string; config: PipelineConfig };
 
-async function getDiff(deps: ReviewDeps): Promise<string> {
+async function getDiff(deps: ReviewDeps, fromSha?: string): Promise<{ comparison: string; diff: string }> {
   // ローカル base branch の鮮度に依存しないよう origin/<base> と比較する
-  const d = await deps.exec(`git diff origin/${safeRef(deps.config.baseBranch)}...HEAD`, { cwd: deps.cwd });
+  const comparison = fromSha && /^[0-9a-f]{7,40}$/.test(fromSha)
+    ? `${fromSha}..HEAD`
+    : `origin/${safeRef(deps.config.baseBranch)}...HEAD`;
+  const d = await deps.exec(`git diff ${comparison}`, { cwd: deps.cwd });
   if (d.code !== 0) throw new Error(`git diff に失敗: ${d.stderr}`);
-  return d.stdout.length > MAX_DIFF_CHARS ? `${d.stdout.slice(0, MAX_DIFF_CHARS)}\n...（以降省略）` : d.stdout;
+  const diff = d.stdout.length > MAX_DIFF_CHARS ? `${d.stdout.slice(0, MAX_DIFF_CHARS)}\n...（以降省略）` : d.stdout;
+  return { comparison, diff };
 }
 
-export function buildReviewPrompt(baseBranch: string, diff: string): string {
-  return `あなたはこのリポジトリのコードレビュー担当。以下の \`git diff ${baseBranch}...HEAD\` の変更を読み、リポジトリの CLAUDE.md 規約への違反・バグ・設計上の問題を指摘せよ。必要ならリポジトリ内のファイルを読んで文脈を確認してよい。
+export function buildReviewPrompt(comparison: string, diff: string): string {
+  return `あなたはこのリポジトリのコードレビュー担当。以下の \`git diff ${comparison}\` の変更を読み、リポジトリの CLAUDE.md 規約への違反・バグ・設計上の問題を指摘せよ。必要ならリポジトリ内のファイルを読んで文脈を確認してよい。
 
 出力は JSON 配列のみ。前置き・後書き・コードフェンスは不要。指摘がなければ [] とだけ出力する。
 各要素の形式:
@@ -52,9 +65,9 @@ ${diff}`;
 }
 
 export async function runReview(deps: ReviewDeps): Promise<Finding[]> {
-  const diff = await getDiff(deps);
+  const { comparison, diff } = await getDiff(deps);
   const agent = resolvePlanningAgent(deps.config);
-  const output = await deps.agent(agent, buildReviewPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff), {
+  const output = await deps.agent(agent, buildReviewPrompt(comparison, diff), {
     cwd: deps.cwd,
     model: planningModelOption(deps.config, agent),
   });
@@ -80,8 +93,8 @@ export function parseFindings(output: string): Finding[] {
 
 export type FollowupResult = { fixed: string[]; remaining: Finding[] };
 
-export function buildFollowupPrompt(baseBranch: string, diff: string, outstanding: Finding[]): string {
-  return `あなたはこのリポジトリのコードレビュー担当。前回の指摘に対して修正が行われた。以下の \`git diff ${baseBranch}...HEAD\` を読み、前回指摘リストの各項目が解消されたかを id ごとに判定せよ。加えて、修正が新たに持ち込んだ問題があれば remaining に追加せよ（correctness・規約違反・セキュリティに関わるもののみ。スタイルの些細な指摘は不要）。
+export function buildFollowupPrompt(comparison: string, diff: string, outstanding: Finding[]): string {
+  return `あなたはこのリポジトリのコードレビュー担当。前回の指摘に対して修正が行われた。以下の \`git diff ${comparison}\` を読み、前回指摘リストの各項目が解消されたかを id ごとに判定せよ。加えて、修正が新たに持ち込んだ問題があれば remaining に追加せよ（correctness・規約違反・セキュリティに関わるもののみ。スタイルの些細な指摘は不要）。
 
 出力は JSON オブジェクトのみ。前置き・後書き・コードフェンスは不要。形式:
 {"fixed": ["解消された指摘の id"], "remaining": [{"id": "未解消なら元の id、新規なら null", "file": "リポジトリ相対パス", "line": 行番号または null, "severity": "critical|high|medium|low", "message": "指摘内容と修正方針", "lintable": 静的解析で機械的に検知できる規約違反なら true}]}
@@ -116,18 +129,35 @@ export function parseFollowupOutput(output: string): FollowupResult {
   throw new Error(`消し込みレビュー出力に JSON オブジェクトがありません: ${output.slice(0, 300)}`);
 }
 
-export async function runFollowupReview(deps: ReviewDeps, outstanding: Finding[]): Promise<FollowupResult> {
-  const diff = await getDiff(deps);
-  const agent = resolvePlanningAgent(deps.config);
-  const output = await deps.agent(
-    agent,
-    buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding),
-    {
-      cwd: deps.cwd,
-      model: planningModelOption(deps.config, agent),
-    },
+function buildFollowupJsonRepairPrompt(output: string): string {
+  return `以下はコードレビューの消し込み結果だが、JSON として解析できなかった。内容を変えず、不足している括弧・引用符・必須フィールドを補って、有効な JSON オブジェクトのみを出力せよ。前置き・後書き・コードフェンスは不要。
+
+形式: {"fixed": ["解消された指摘の id"], "remaining": [{"id": "未解消なら元の id、新規なら null", "file": "リポジトリ相対パス", "line": null, "severity": "critical|high|medium|low", "message": "指摘内容と修正方針", "lintable": false}]}
+
+## JSON を修復する対象
+
+${output.slice(0, 20_000)}`;
+}
+
+export async function runFollowupReview(
+  deps: ReviewDeps,
+  outstanding: Finding[],
+  diffBaseSha?: string,
+): Promise<FollowupResult> {
+  const { comparison, diff } = await getDiff(deps, diffBaseSha);
+  const result = await runEfficiencyAgent(
+    deps,
+    "followupReview",
+    buildFollowupPrompt(comparison, diff, outstanding),
+    { cwd: deps.cwd },
   );
-  return parseFollowupOutput(output);
+  try {
+    return parseFollowupOutput(result.output);
+  } catch {
+    const repairAgent = nextEfficiencyAgent(deps.config, "followupReview", result.agent);
+    const repaired = await deps.agent(repairAgent, buildFollowupJsonRepairPrompt(result.output), { cwd: deps.cwd });
+    return parseFollowupOutput(repaired);
+  }
 }
 
 function isFinding(x: unknown): boolean {
