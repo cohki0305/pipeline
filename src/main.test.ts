@@ -7,13 +7,16 @@ describe("parseMain", () => {
     expect(parseMain(["153", "--design", "plan.md"])).toEqual({ cmd: "run", issue: 153, designDocPath: "plan.md" });
   });
 
-  test("babysit / babysit-pr / branch のサブコマンド", () => {
+  test("babysit / babysit-pr / branch / planning-agent のサブコマンド", () => {
     expect(parseMain(["babysit"])).toEqual({ cmd: "babysit" });
     expect(parseMain(["babysit-pr", "194"])).toEqual({ cmd: "babysit-pr", pr: 194 });
     expect(parseMain(["branch"])).toEqual({ cmd: "branch", op: "list" });
     expect(parseMain(["branch", "list"])).toEqual({ cmd: "branch", op: "list" });
     expect(parseMain(["branch", "add", "serp-api"])).toEqual({ cmd: "branch", op: "add", pattern: "serp-api" });
     expect(parseMain(["branch", "remove", "serp-api"])).toEqual({ cmd: "branch", op: "remove", pattern: "serp-api" });
+    expect(parseMain(["planning-agent"])).toEqual({ cmd: "planning-agent", op: "list" });
+    expect(parseMain(["planning", "codex"])).toEqual({ cmd: "planning-agent", op: "set", agent: "codexSol" });
+    expect(parseMain(["planning-agent", "claude"])).toEqual({ cmd: "planning-agent", op: "set", agent: "claude" });
   });
 
   test("不正な入力は help", () => {
@@ -21,6 +24,7 @@ describe("parseMain", () => {
     expect(parseMain(["abc"])).toEqual({ cmd: "help" });
     expect(parseMain(["babysit-pr"])).toEqual({ cmd: "help" });
     expect(parseMain(["branch", "add"])).toEqual({ cmd: "help" });
+    expect(parseMain(["planning-agent", "opus"])).toEqual({ cmd: "help" });
     expect(parseMain(["-1"])).toEqual({ cmd: "help" });
   });
 });
