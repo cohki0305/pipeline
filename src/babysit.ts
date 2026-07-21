@@ -25,7 +25,23 @@ export type BabysitDeps = {
   github: Github;
   projectRoot: string;
   log(msg: string): void;
+  sleep?(ms: number): Promise<void>;
 };
+
+// GitHub は main への push 直後 mergeable を非同期計算するため、UNKNOWN の間は確定するまで待つ
+const MERGEABLE_POLL_ATTEMPTS = 5;
+const MERGEABLE_POLL_INTERVAL_MS = 3000;
+
+async function resolveMergeable(deps: BabysitDeps, pr: PrSummary): Promise<PrSummary> {
+  if (pr.mergeable !== "UNKNOWN") return pr;
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  let current = pr;
+  for (let i = 0; i < MERGEABLE_POLL_ATTEMPTS && current.mergeable === "UNKNOWN"; i++) {
+    await sleep(MERGEABLE_POLL_INTERVAL_MS);
+    current = await deps.github.getPr(deps.projectRoot, pr.number);
+  }
+  return current;
+}
 
 export type PrAction = { number: number; actions: string[] };
 
@@ -172,11 +188,13 @@ export async function runBabysit(deps: BabysitDeps): Promise<PrAction[]> {
   const excludes = deps.config.babysitExcludeBranches ?? DEFAULT_EXCLUDES;
   const authors = deps.config.babysitAuthors ?? [];
   const results: PrAction[] = [];
-  for (const pr of await deps.github.listOpenPrs(deps.projectRoot)) {
-    if (matchesBranch(excludes, pr.headRefName)) continue;
+  for (const listed of await deps.github.listOpenPrs(deps.projectRoot)) {
+    if (matchesBranch(excludes, listed.headRefName)) continue;
     // コメント/CI 対応の対象: babysitBranches にマッチするブランチ、または babysitAuthors にマッチする作成者
-    const wantComments = matchesBranch(patterns, pr.headRefName) || authors.includes(pr.author);
+    const wantComments = matchesBranch(patterns, listed.headRefName) || authors.includes(listed.author);
     const wantCi = wantComments;
+    // コンフリクト判定は mergeable が確定してから行う（push 直後は UNKNOWN のことがある）
+    const pr = wantComments || listed.mergeable === "UNKNOWN" ? await resolveMergeable(deps, listed) : listed;
     // コンフリクト解消は全 PR（保護ブランチ除く）
     const wantConflict = pr.mergeable === "CONFLICTING";
     if (!wantComments && !wantConflict && !wantCi) continue;

@@ -22,7 +22,9 @@ function makeDeps(opts: {
   lastCommit?: string;
   babysitBranches?: string[];
   babysitAuthors?: string[];
+  mergeableSequence?: string[];
 }) {
+  const seq = [...(opts.mergeableSequence ?? [])];
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
   const deps = {
@@ -50,12 +52,17 @@ function makeDeps(opts: {
       },
       createPr: async () => "",
       listOpenPrs: async () => opts.prs ?? [],
+      getPr: async (_cwd: string, num: number) => {
+        const first = (opts.prs ?? []).find((p) => p.number === num) ?? PR;
+        return { ...first, mergeable: seq.shift() ?? first.mergeable };
+      },
       getPrComments: async () => opts.comments ?? [],
       getPrFailedChecks: async () => opts.failedChecks ?? [],
       getWorkflowRunFailedLog: async () => opts.failedCiLog ?? "",
     },
     projectRoot: "/repo",
     log: () => {},
+    sleep: async () => {},
   };
   return { deps: deps as never, agentCalls, execCalls };
 }
@@ -222,6 +229,27 @@ describe("runBabysit", () => {
     expect(results).toEqual([{ number: 200, actions: ["conflict-resolved"] }]);
     expect(h.agentCalls.some((c) => c.prompt.includes("コンフリクト"))).toBe(true);
     expect(h.agentCalls.some((c) => c.prompt.includes("レビューコメント"))).toBe(false);
+  });
+
+  test("mergeable が UNKNOWN の PR は確定まで再取得してからコンフリクトを解消する", async () => {
+    const h = makeDeps({
+      mergeFails: true,
+      // main への push 直後は GitHub が未計算 → UNKNOWN。再取得で CONFLICTING に確定
+      prs: [{ number: 500, headRefName: "issue-9", baseRefName: "main", mergeable: "UNKNOWN", author: "koki" }],
+      mergeableSequence: ["UNKNOWN", "CONFLICTING"],
+    });
+    const results = await runBabysit(h.deps);
+    expect(results).toEqual([{ number: 500, actions: ["conflict-resolved"] }]);
+    expect(h.agentCalls.some((c) => c.prompt.includes("コンフリクト"))).toBe(true);
+  });
+
+  test("UNKNOWN が MERGEABLE に確定したらコンフリクト解消はしない", async () => {
+    const h = makeDeps({
+      prs: [{ number: 501, headRefName: "issue-9", baseRefName: "main", mergeable: "UNKNOWN", author: "koki" }],
+      mergeableSequence: ["MERGEABLE"],
+    });
+    const results = await runBabysit(h.deps);
+    expect(h.agentCalls.some((c) => c.prompt.includes("コンフリクト"))).toBe(false);
   });
 
   test("main などの保護ブランチが head の PR にはコンフリクトでも触らない", async () => {

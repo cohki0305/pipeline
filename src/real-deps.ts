@@ -33,5 +33,6 @@ export function makeBabysitDeps(projectRoot: string): BabysitDeps {
     github: makeGithub(shellExec),
     projectRoot,
     log: (msg) => console.log(`[babysit] ${msg}`),
+    sleep: (ms) => Bun.sleep(ms),
   };
 }
