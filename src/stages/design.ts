@@ -1,6 +1,7 @@
 import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Issue } from "../github";
+import type { Finding } from "./review";
 
 export type Complexity = "simple" | "complex";
 export type DesignResult = { complexity: Complexity; docPath: string; docContent: string };
@@ -39,6 +40,15 @@ export function parseDesignOutput(output: string): { complexity: Complexity; con
 }
 
 // セッションで対話的に作った設計書をパイプラインに注入する経路。claude の設計呼び出しを省略する
+export async function loadExistingDesign(
+  deps: { cwd: string; readFile(path: string): Promise<string> },
+  docPath: string,
+): Promise<DesignResult> {
+  const output = await deps.readFile(`${deps.cwd}/${docPath}`);
+  const { complexity, content } = parseDesignOutput(output);
+  return { complexity, docPath, docContent: content };
+}
+
 export async function loadDesign(
   deps: {
     cwd: string;
@@ -55,6 +65,51 @@ export async function loadDesign(
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;
   await deps.writeFile(`${deps.cwd}/${docPath}`, content);
   return { complexity, docPath, docContent: content };
+}
+
+export function nextRevision(content: string): number {
+  const fm = content.trimStart().match(/^---\n([\s\S]*?)\n---/);
+  const m = fm?.[1]?.match(/revision:\s*(\d+)/);
+  return m ? Number(m[1]) + 1 : 2;
+}
+
+export function buildDesignRevisionPrompt(currentContent: string, findings: Finding[], revision: number): string {
+  return `あなたはこのリポジトリの設計担当。以下の実装計画とコードレビュー指摘を読み、指摘を反映した更新版の実装計画を Markdown で出力せよ。出力は計画の Markdown のみとし、先頭に必ず次の frontmatter を付ける:
+
+---
+complexity: （現行計画と同じ simple または complex を維持）
+revision: ${revision}
+---
+
+計画本文に指摘への対応を反映すること。末尾に「## レビュー反映（revision ${revision}）」セクションを追加し、各指摘 id と対応方針を列挙せよ。
+
+## 現行の実装計画
+
+${currentContent}
+
+## レビュー指摘
+
+${JSON.stringify(findings, null, 2)}`;
+}
+
+export async function reviseDesignFromReview(
+  deps: {
+    agent: AgentRunner;
+    cwd: string;
+    config: PipelineConfig;
+    writeFile(path: string, content: string): Promise<void>;
+  },
+  design: DesignResult,
+  findings: Finding[],
+): Promise<DesignResult> {
+  const revision = nextRevision(design.docContent);
+  const output = await deps.agent("claude", buildDesignRevisionPrompt(design.docContent, findings, revision), {
+    cwd: deps.cwd,
+    model: deps.config.reviewModel,
+  });
+  const { complexity, content } = parseDesignOutput(output);
+  await deps.writeFile(`${deps.cwd}/${design.docPath}`, content);
+  return { complexity, docPath: design.docPath, docContent: content };
 }
 
 export async function runDesign(
