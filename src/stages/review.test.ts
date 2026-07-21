@@ -68,6 +68,18 @@ describe("runReview", () => {
     expect(findings).toEqual([FINDING]);
   });
 
+  test("planningAgent: codexSol ならレビューを codex に依頼する", async () => {
+    await runReview({
+      exec: async () => ({ code: 0, stdout: "diff --git a/x.ts b/x.ts", stderr: "" }),
+      agent: async (agent) => {
+        expect(agent).toBe("codexSol");
+        return "[]";
+      },
+      cwd: "/work",
+      config: { ...CONFIG, planningAgent: "codexSol" },
+    });
+  });
+
   test("git diff 失敗は throw する", async () => {
     expect(
       runReview({

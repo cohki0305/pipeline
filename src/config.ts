@@ -16,6 +16,8 @@ export type PipelineConfig = {
   babysitAuthors?: string[];
   /** 設計・レビューを行う claude のモデル上書き（例 "opus"）。未指定なら claude CLI のデフォルト */
   reviewModel?: string;
+  /** 設計・レビュー担当エージェント。未指定は claude。Fable 切れ時は codexSol */
+  planningAgent?: "claude" | "codexSol";
 };
 
 const DEFAULTS = {

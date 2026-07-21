@@ -2,6 +2,7 @@ import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
 import { safeRef } from "../git-ref";
+import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 
 export type Severity = "critical" | "high" | "medium" | "low";
 export type Finding = {
@@ -52,9 +53,10 @@ ${diff}`;
 
 export async function runReview(deps: ReviewDeps): Promise<Finding[]> {
   const diff = await getDiff(deps);
-  const output = await deps.agent("claude", buildReviewPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff), {
+  const agent = resolvePlanningAgent(deps.config);
+  const output = await deps.agent(agent, buildReviewPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff), {
     cwd: deps.cwd,
-    model: deps.config.reviewModel,
+    model: planningModelOption(deps.config, agent),
   });
   return parseFindings(output);
 }
@@ -116,10 +118,15 @@ export function parseFollowupOutput(output: string): FollowupResult {
 
 export async function runFollowupReview(deps: ReviewDeps, outstanding: Finding[]): Promise<FollowupResult> {
   const diff = await getDiff(deps);
-  const output = await deps.agent("claude", buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding), {
-    cwd: deps.cwd,
-    model: deps.config.reviewModel,
-  });
+  const agent = resolvePlanningAgent(deps.config);
+  const output = await deps.agent(
+    agent,
+    buildFollowupPrompt(`origin/${safeRef(deps.config.baseBranch)}`, diff, outstanding),
+    {
+      cwd: deps.cwd,
+      model: planningModelOption(deps.config, agent),
+    },
+  );
   return parseFollowupOutput(output);
 }
 

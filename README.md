@@ -54,7 +54,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - 消し込み方式: 2 巡目以降のレビューは diff 全体の再レビューではなく、前回指摘リスト（id 付き）の fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加のみ
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
-- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等でモデルを差し替え可能（Fable のトークン切れ時に Opus へ切り替える等）
+- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等で claude のモデルを差し替え可能。Fable のトークン切れ時は `"planningAgent": "codexSol"` で設計・レビューを Codex（`gpt-5.6-sol`）に切り替えられる
 
 ## babysit（open PR の見張り）
 

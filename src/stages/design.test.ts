@@ -91,4 +91,20 @@ describe("runDesign", () => {
     expect(result.docPath).toBe("docs/plans/2026-07-19-issue-143.md");
     expect(written).toEqual([{ path: "/work/docs/plans/2026-07-19-issue-143.md", content: DOC }]);
   });
+
+  test("planningAgent: codexSol なら設計を codex に依頼する", async () => {
+    await runDesign(
+      {
+        agent: async (agent) => {
+          expect(agent).toBe("codexSol");
+          return DOC;
+        },
+        cwd: "/work",
+        config: { ...CONFIG, planningAgent: "codexSol" },
+        writeFile: async () => {},
+      },
+      { number: 143, title: "直す", body: "本文" },
+      "2026-07-19",
+    );
+  });
 });
