@@ -70,8 +70,10 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）
 - 消し込み方式: 2 巡目以降は前回指摘リスト（id 付き）と、修正前 SHA からの差分だけで fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加を行う
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
+- 実装・レビュー修正・babysit・コンフリクト解消のコミットは、planning agent が実際の未コミット差分を読み、具体的な変更内容と WHY を含む Conventional Commit 形式で生成する。「レビュー反映を実装」「レビューコメントに対応」など作業名だけのメッセージは拒否する
+- PR タイトルは初回実装コミットの subject を使う。PR 本文は最終 diff・設計書・実行レポートを planning agent が読み、「変更概要」「実装方針」「主な変更」「検証」「レビュー観点」「関連ドキュメント」を含むレビュー用 Markdown として生成する。必須セクション・順序・最低限の情報量を満たさない本文は拒否する
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
-- 初回設計・初回フルレビューは `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
+- 初回設計・初回フルレビュー・コミットメッセージ・PR 本文は `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
 
 ## babysit（open PR の見張り）
 

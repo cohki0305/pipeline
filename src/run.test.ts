@@ -15,6 +15,30 @@ const CONFIG = {
 const DESIGN = (c: "simple" | "complex", revision?: number) =>
   `---\ncomplexity: ${c}${revision ? `\nrevision: ${revision}` : ""}\n---\n# 計画`;
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
+const COMMIT_MESSAGE = `feat: 回答状態の判定を安全化
+
+不正な入力でも既存回答を壊さず、利用者が処理を継続できるようにする。`;
+const PR_BODY = `Closes #143
+
+## 変更概要
+回答状態の判定を安全化し、不正な入力でも処理を継続できるようにします。
+
+## 実装方針
+設計書を入力の中心にして、品質ゲートと内部レビューを段階的に実行します。
+
+## 主な変更
+- 回答状態の検証処理と例外経路を追加しました。
+- レビューで検出した境界条件を設計書と実装へ反映しました。
+
+## 検証
+- lint、typecheck、testの品質ゲートが成功しました。
+
+## レビュー観点
+- 不正な入力と既存回答が同時に存在する場合の挙動を確認してください。
+
+## 関連ドキュメント
+- 設計: docs/plans/2026-07-19-issue-143.md
+- 実行レポート: docs/runs/issue-143.md`;
 
 const findingsOf = (n: number, severity = "high") =>
   JSON.stringify(
@@ -45,6 +69,8 @@ function makeHarness(opts: {
 }) {
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
+  const commitMessages: string[] = [];
+  const createdPrArgs: { title: string; body: string; base: string }[] = [];
   const written: { path: string; content: string }[] = [];
   const fileStore: Record<string, string> = {};
   if (opts.existingDesignDoc) {
@@ -58,8 +84,9 @@ function makeHarness(opts: {
 
   const deps = {
     config: { ...CONFIG, autoFixCommands: opts.autoFixCommands },
-    exec: async (cmd: string): Promise<ExecResult> => {
+    exec: async (cmd: string, execOpts?: { env?: Record<string, string> }): Promise<ExecResult> => {
       execCalls.push(cmd);
+      if (execOpts?.env?.COMMIT_MSG) commitMessages.push(execOpts.env.COMMIT_MSG);
       if (cmd.startsWith("test -d")) return { code: opts.worktreeExists ? 0 : 1, stdout: "", stderr: "" };
       const f = failures.find((f) => cmd === f.cmd && f.times > 0);
       if (f) {
@@ -75,6 +102,8 @@ function makeHarness(opts: {
     },
     agent: async (agent: string, prompt: string) => {
       agentCalls.push({ agent, prompt });
+      if (prompt.includes("GitHub PR 本文")) return PR_BODY;
+      if (prompt.includes("コミットメッセージ")) return COMMIT_MESSAGE;
       if (prompt.includes("現行の実装計画")) return DESIGN(opts.complexity, 2);
       if (prompt.includes("complexity の判断基準")) return DESIGN(opts.complexity);
       if (prompt.includes("指摘せよ")) return reviews.shift() ?? "[]";
@@ -83,7 +112,10 @@ function makeHarness(opts: {
     },
     github: {
       fetchIssue: async () => ({ number: 143, title: "直す", body: "本文" }),
-      createPr: async () => "https://pr/1",
+      createPr: async (_cwd: string, args: { title: string; body: string; base: string }) => {
+        createdPrArgs.push(args);
+        return "https://pr/1";
+      },
     },
     projectRoot: "/repo",
     log: () => {},
@@ -105,7 +137,7 @@ function makeHarness(opts: {
     },
     date: "2026-07-19",
   };
-  return { deps: deps as never, agentCalls, execCalls, written, fileStore };
+  return { deps: deps as never, agentCalls, execCalls, commitMessages, createdPrArgs, written, fileStore };
 }
 
 describe("runPipeline", () => {
@@ -119,6 +151,13 @@ describe("runPipeline", () => {
     expect(h.execCalls).toContain("git fetch origin main");
     expect(h.execCalls).toContain('git worktree add "/wt/issue-143" -b issue-143 origin/main');
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
+    expect(h.commitMessages[0]).toContain("feat: 回答状態の判定を安全化");
+    expect(h.commitMessages[0]).toContain("関連: #143");
+    expect(h.createdPrArgs[0]).toEqual({
+      title: "feat: 回答状態の判定を安全化",
+      body: PR_BODY,
+      base: "main",
+    });
   });
 
   test("lint 失敗は composerFast が修正する", async () => {
