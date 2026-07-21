@@ -38,4 +38,15 @@ describe("loadConfig", () => {
     const dir = tempProject({ commands: { lint: "x", typecheck: "y" } });
     expect(() => loadConfig(dir)).toThrow("commands.test");
   });
+
+  test("planningAgent が未対応の値なら throw する", () => {
+    const dir = tempProject({ ...VALID, planningAgent: "codex" });
+    expect(() => loadConfig(dir)).toThrow("planningAgent");
+  });
+
+  test("planningAgent は未指定でも対応値でも通る", () => {
+    expect(loadConfig(tempProject(VALID)).planningAgent).toBeUndefined();
+    expect(loadConfig(tempProject({ ...VALID, planningAgent: "codexSol" })).planningAgent).toBe("codexSol");
+    expect(loadConfig(tempProject({ ...VALID, planningAgent: "claude" })).planningAgent).toBe("claude");
+  });
 });

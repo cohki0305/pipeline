@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PLANNING_AGENTS, type PlanningAgent } from "./planning-agent";
 
 export type PipelineConfig = {
   commands: { lint: string; typecheck: string; test: string };
@@ -16,6 +17,8 @@ export type PipelineConfig = {
   babysitAuthors?: string[];
   /** 設計・レビューを行う claude のモデル上書き（例 "opus"）。未指定なら claude CLI のデフォルト */
   reviewModel?: string;
+  /** 設計・レビュー担当エージェント。未指定は claude。Fable 切れ時は codexSol */
+  planningAgent?: PlanningAgent;
 };
 
 const DEFAULTS = {
@@ -39,6 +42,11 @@ export function loadConfig(projectRoot: string): PipelineConfig {
   } as PipelineConfig;
   for (const key of ["lint", "typecheck", "test"] as const) {
     if (!cfg.commands?.[key]) throw new Error(`commands.${key} が未設定です`);
+  }
+  if (cfg.planningAgent !== undefined && !PLANNING_AGENTS.includes(cfg.planningAgent)) {
+    throw new Error(
+      `planningAgent は ${PLANNING_AGENTS.join(" / ")} のいずれかです（指定値: ${JSON.stringify(cfg.planningAgent)}）`,
+    );
   }
   return cfg;
 }

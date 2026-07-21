@@ -1,6 +1,7 @@
 import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Issue } from "../github";
+import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 
 export type Complexity = "simple" | "complex";
 export type DesignResult = { complexity: Complexity; docPath: string; docContent: string };
@@ -67,9 +68,10 @@ export async function runDesign(
   issue: Issue,
   date: string,
 ): Promise<DesignResult> {
-  const output = await deps.agent("claude", buildDesignPrompt(issue), {
+  const agent = resolvePlanningAgent(deps.config);
+  const output = await deps.agent(agent, buildDesignPrompt(issue), {
     cwd: deps.cwd,
-    model: deps.config.reviewModel,
+    model: planningModelOption(deps.config, agent),
   });
   const { complexity, content } = parseDesignOutput(output);
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;

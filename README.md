@@ -54,7 +54,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - 消し込み方式: 2 巡目以降のレビューは diff 全体の再レビューではなく、前回指摘リスト（id 付き）の fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加のみ
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
-- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等でモデルを差し替え可能（Fable のトークン切れ時に Opus へ切り替える等）
+- 設計・レビューは `claude -p`（既定モデル）で行う。`.agent-pipeline.json` の `"reviewModel": "opus"` 等で claude のモデルを差し替え可能。Fable のトークン切れ時は `"planningAgent": "codexSol"` で設計・レビューを Codex（`gpt-5.6-sol`）に切り替えられる
 
 ## babysit（open PR の見張り）
 
@@ -67,6 +67,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - 自分で設定したレビュー bot（Codex クラウドレビュー等、association が NONE になる）を信頼したい場合は `.agent-pipeline.json` に `"babysitTrustedAuthors": ["chatgpt-codex-connector[bot]"]` を追加する。login の `[bot]` サフィックスは有無を問わず照合される。**その bot のコメントはコマンド実行権限を持つエージェントへのプロンプトになるため、自分の管理下にある bot だけを載せること**
 - **保護ブランチの例外**: head が `babysitExcludeBranches`（省略時 `["main", "master", "develop", "release/*"]`）にマッチする PR には、コンフリクト解消も含め一切触らない
 - 対象ブランチの管理コマンド: `pipeline branch [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、`.agent-pipeline.json` を書き換える）
+- 設計・レビュー担当の切り替え: `pipeline planning-agent [list | claude | codex]`（`codex` は `codexSol` の別名）
 - PR ブランチが既にどこかの worktree に checkout 済みの場合はその worktree を再利用する
 
 ## relay（webhook のイベント駆動監視）
