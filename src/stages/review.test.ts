@@ -129,7 +129,7 @@ describe("消し込みレビュー", () => {
   const OUTSTANDING = [{ ...FINDING, id: "R1-1" } as Finding];
 
   test("buildFollowupPrompt は前回指摘の id と diff を含む", () => {
-    const p = buildFollowupPrompt("main", "diff --git a/x", OUTSTANDING);
+    const p = buildFollowupPrompt("main...HEAD", "diff --git a/x", OUTSTANDING);
     expect(p).toContain("R1-1");
     expect(p).toContain("diff --git a/x");
     expect(p).toContain('"fixed"');
@@ -161,7 +161,50 @@ describe("消し込みレビュー", () => {
         config: CONFIG,
       },
       OUTSTANDING,
+      "0123456789abcdef0123456789abcdef01234567",
     );
+    expect(r).toEqual({ fixed: ["R1-1"], remaining: [] });
+  });
+
+  test("runFollowupReview は修正前 SHA からの差分だけを取得する", async () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    await runFollowupReview(
+      {
+        exec: async (cmd) => {
+          expect(cmd).toBe(`git diff ${sha}..HEAD`);
+          return { code: 0, stdout: "diff --git a/x", stderr: "" };
+        },
+        agent: async () => '{"fixed":["R1-1"],"remaining":[]}',
+        cwd: "/work",
+        config: CONFIG,
+      },
+      OUTSTANDING,
+      sha,
+    );
+  });
+
+  test("runFollowupReview は不正な JSON を 1 回だけ再整形して回復する", async () => {
+    let calls = 0;
+    const r = await runFollowupReview(
+      {
+        exec: async () => ({ code: 0, stdout: "diff --git a/x", stderr: "" }),
+        agent: async (agent, prompt) => {
+          calls++;
+          if (calls === 1) {
+            expect(agent).toBe("composerFast");
+            return '{"fixed":["R1-1"],"remaining":[{"id":null';
+          }
+          expect(agent).toBe("composer");
+          expect(prompt).toContain("JSON を修復");
+          expect(prompt).toContain('"id":null');
+          return '{"fixed":["R1-1"],"remaining":[]}';
+        },
+        cwd: "/work",
+        config: CONFIG,
+      },
+      OUTSTANDING,
+    );
+    expect(calls).toBe(2);
     expect(r).toEqual({ fixed: ["R1-1"], remaining: [] });
   });
 });

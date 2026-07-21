@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
 import {
-  buildDesignRevisionPrompt,
+  appendReviewFindings,
   loadDesign,
   nextRevision,
   parseDesignOutput,
@@ -123,34 +123,34 @@ describe("nextRevision", () => {
   });
 });
 
-describe("buildDesignRevisionPrompt", () => {
-  test("現行計画と指摘を含む", () => {
-    const p = buildDesignRevisionPrompt(DOC, [{ file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false }], 2);
-    expect(p).toContain("現行の実装計画");
-    expect(p).toContain("revision: 2");
-    expect(p).toContain("直せ");
+describe("appendReviewFindings", () => {
+  const finding = { id: "R1-1", file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false } as const;
+
+  test("エージェントを呼ばず frontmatter と末尾へレビュー指摘を追記する", () => {
+    const revised = appendReviewFindings(DOC, [finding]);
+    expect(revised).toContain("revision: 2");
+    expect(revised).toContain("## レビュー反映（revision 2）");
+    expect(revised).toContain("R1-1: 直せ（a.ts:1）");
+  });
+
+  test("同じ指摘の再開時は重複追記しない", () => {
+    const once = appendReviewFindings(DOC, [finding]);
+    expect(appendReviewFindings(once, [finding])).toBe(once);
   });
 });
 
 describe("reviseDesignFromReview", () => {
-  test("設計担当を呼び、同じ docPath に上書きする", async () => {
+  test("設計担当を呼ばず、同じ docPath に機械的に上書きする", async () => {
     const written: { path: string; content: string }[] = [];
-    const revised = `---\ncomplexity: simple\nrevision: 2\n---\n\n# 更新`;
     const result = await reviseDesignFromReview(
       {
-        agent: async (agent, prompt) => {
-          expect(agent).toBe("composerFast");
-          expect(prompt).toContain("現行の実装計画");
-          return revised;
-        },
         cwd: "/work",
-        config: CONFIG,
         writeFile: async (path, content) => {
           written.push({ path, content });
         },
       },
       { complexity: "simple", docPath: "docs/plans/x.md", docContent: DOC },
-      [{ file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false }],
+      [{ id: "R1-1", file: "a.ts", line: 1, severity: "high", message: "直せ", lintable: false }],
     );
     expect(result.docPath).toBe("docs/plans/x.md");
     expect(result.docContent).toContain("revision: 2");

@@ -5,6 +5,8 @@ import { EFFICIENCY_TASK_AGENTS, type EfficiencyTask, type EfficiencyTaskAgent }
 
 export type PipelineConfig = {
   commands: { lint: string; typecheck: string; test: string };
+  /** 修正ループ中だけ使う変更対象向けコマンド。未指定の項目は commands のフルゲートへフォールバック */
+  incrementalCommands?: Partial<{ lint: string; typecheck: string; test: string }>;
   designDocDir: string;
   reportDir: string;
   baseBranch: string;

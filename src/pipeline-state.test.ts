@@ -164,13 +164,14 @@ describe("resolveResumePlan", () => {
         design: { docPath: "docs/plans/x.md", complexity: "simple" },
         implement: true,
         initialCommit: true,
-        review: { round: 1, outstanding, phase: "applied" },
+        review: { round: 1, outstanding, phase: "applied", diffBaseSha: "0123456" },
       },
       null,
     );
     expect(plan.resumeReview).toBe(false);
     expect(plan.resumeFollowup).toBe(true);
     expect(plan.outstanding).toEqual(outstanding);
+    expect(plan.diffBaseSha).toBe("0123456");
   });
 
   test("状態に設計がなくても worktree 内の設計書を検出する", () => {

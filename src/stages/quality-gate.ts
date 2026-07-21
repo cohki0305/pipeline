@@ -29,9 +29,17 @@ export async function runQualityGate(deps: {
   exec: Exec;
   cwd: string;
   config: PipelineConfig;
+  scope?: "full" | "incremental";
+  changedFiles?: string[];
 }): Promise<GateResult> {
   for (const check of CHECKS) {
-    const r = await deps.exec(deps.config.commands[check.key], { cwd: deps.cwd });
+    const cmd = deps.scope === "incremental"
+      ? deps.config.incrementalCommands?.[check.key] ?? deps.config.commands[check.key]
+      : deps.config.commands[check.key];
+    const r = await deps.exec(cmd, {
+      cwd: deps.cwd,
+      env: { PIPELINE_CHANGED_FILES: (deps.changedFiles ?? []).join("\n") },
+    });
     if (r.code !== 0) {
       const raw = `${r.stdout}\n${r.stderr}`;
       return { ok: false, kind: check.kind, violations: parseViolations(check.key, raw), raw };

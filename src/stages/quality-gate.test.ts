@@ -78,3 +78,22 @@ describe("runAutoFixLint", () => {
     expect(ok).toBe(false);
   });
 });
+
+describe("runQualityGate incremental", () => {
+  test("増分コマンドへ変更ファイルを環境変数で渡し、未設定項目はフルコマンドへ戻る", async () => {
+    const calls: { cmd: string; files?: string }[] = [];
+    const result = await runQualityGate({
+      exec: async (cmd, opts) => {
+        calls.push({ cmd, files: opts?.env?.PIPELINE_CHANGED_FILES });
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      cwd: "/w",
+      config: { ...CONFIG, incrementalCommands: { lint: "lint-changed", test: "test-changed" } },
+      scope: "incremental",
+      changedFiles: ["src/a.ts", "src/b.ts"],
+    });
+    expect(result.ok).toBe(true);
+    expect(calls.map((call) => call.cmd)).toEqual(["lint-changed", "run-tc", "test-changed"]);
+    expect(calls[0]!.files).toBe("src/a.ts\nsrc/b.ts");
+  });
+});

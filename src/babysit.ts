@@ -2,6 +2,7 @@ import type { AgentRunner } from "./agents";
 import { buildCiFailurePrompt, pickWorkflowRunId } from "./ci-status";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
+import { runEfficiencyAgent } from "./efficiency-agent";
 import type { Github, PrComment, PrSummary } from "./github";
 import { safeRef } from "./git-ref";
 import { commitAll, passQualityGate } from "./run";
@@ -57,6 +58,13 @@ ${commentsJson}
 \`\`\``;
 }
 
+export function buildFeedbackPrompt(commentsJson?: string, ciFailurePrompt?: string): string {
+  return [
+    commentsJson ? buildCommentsPrompt(commentsJson) : "",
+    ciFailurePrompt ?? "",
+  ].filter(Boolean).join("\n\n---\n\n");
+}
+
 // gh は UTC、git はローカルオフセットを返すため文字列比較ではなく時刻で比較する
 export function isNewComment(c: PrComment, lastCommitIso: string): boolean {
   const created = Date.parse(c.createdAt);
@@ -100,6 +108,19 @@ async function push(deps: BabysitDeps, cwd: string, branch: string): Promise<voi
   if (p.code !== 0) throw new Error(`push に失敗: ${p.stderr}`);
 }
 
+async function headSha(deps: BabysitDeps, cwd: string): Promise<string> {
+  const result = await deps.exec("git rev-parse HEAD", { cwd });
+  const sha = result.stdout.trim();
+  if (result.code !== 0 || !/^[0-9a-f]{7,40}$/.test(sha)) throw new Error(`HEAD SHA の取得に失敗: ${result.stderr}`);
+  return sha;
+}
+
+async function changedFiles(deps: BabysitDeps, cwd: string, sha: string): Promise<string[]> {
+  const result = await deps.exec(`git diff --name-only ${sha}`, { cwd });
+  if (result.code !== 0) throw new Error(`変更ファイルの取得に失敗: ${result.stderr}`);
+  return result.stdout.split("\n").map((file) => file.trim()).filter(Boolean);
+}
+
 export type BabysitOpts = { comments?: boolean; ci?: boolean };
 
 export async function babysitPr(deps: BabysitDeps, pr: PrSummary, opts: BabysitOpts = {}): Promise<PrAction> {
@@ -138,31 +159,43 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
   if (fresh.length !== comments.length) {
     deps.log(`#${pr.number}: 信頼できない投稿者のコメント ${fresh.length - comments.length} 件を無視`);
   }
-  if (comments.length > 0) {
-    deps.log(`#${pr.number}: 新規コメント ${comments.length} 件 → composer が対応`);
-    await deps.agent("composer", buildCommentsPrompt(JSON.stringify(comments, null, 2)), { cwd });
-    await passQualityGate(deps, cwd, "composer");
-    await commitAll(deps, cwd, "PR レビューコメントに対応");
-    await push(deps, cwd, head);
-    actions.push(`comments-addressed(${comments.length})`);
-  }
-
+  let failedChecks: Awaited<ReturnType<Github["getPrFailedChecks"]>> = [];
+  let ciFailurePrompt: string | undefined;
   if (opts.ci !== false) {
-    const failedChecks = await deps.github.getPrFailedChecks(deps.projectRoot, pr.number);
+    failedChecks = await deps.github.getPrFailedChecks(deps.projectRoot, pr.number);
     if (failedChecks.length > 0) {
       const runId = pickWorkflowRunId(failedChecks);
       if (runId == null) {
         deps.log(`#${pr.number}: CI 失敗を検知したが workflow run id を取得できませんでした`);
       } else {
         const logs = await deps.github.getWorkflowRunFailedLog(deps.projectRoot, runId);
-        deps.log(`#${pr.number}: CI 失敗 (${failedChecks.map((check) => check.name).join(", ")}) → composer が修正`);
-        await deps.agent("composer", buildCiFailurePrompt(failedChecks, logs), { cwd });
-        await passQualityGate(deps, cwd, "composer");
-        await commitAll(deps, cwd, "CI 失敗に対応");
-        await push(deps, cwd, head);
-        actions.push(`ci-fixed(${failedChecks.map((check) => check.name).join(",")})`);
+        ciFailurePrompt = buildCiFailurePrompt(failedChecks, logs);
       }
     }
+  }
+
+  if (comments.length > 0 || ciFailurePrompt) {
+    const beforeSha = await headSha(deps, cwd);
+    const prompt = buildFeedbackPrompt(
+      comments.length > 0 ? JSON.stringify(comments, null, 2) : undefined,
+      ciFailurePrompt,
+    );
+    const { agent } = await runEfficiencyAgent(deps, "babysitFix", prompt, { cwd });
+    const files = await changedFiles(deps, cwd, beforeSha);
+    deps.log(
+      `#${pr.number}: コメント ${comments.length} 件 / CI ${failedChecks.length} 件 → ${agent} が一括対応`,
+    );
+    const hasIncremental = Boolean(
+      deps.config.incrementalCommands && Object.values(deps.config.incrementalCommands).some(Boolean),
+    );
+    if (hasIncremental) {
+      await passQualityGate(deps, cwd, agent, { scope: "incremental", changedFiles: files });
+    }
+    await passQualityGate(deps, cwd, agent);
+    await commitAll(deps, cwd, comments.length > 0 && ciFailurePrompt ? "PR コメントと CI 失敗に一括対応" : comments.length > 0 ? "PR レビューコメントに対応" : "CI 失敗に対応");
+    await push(deps, cwd, head);
+    if (comments.length > 0) actions.push(`comments-addressed(${comments.length})`);
+    if (ciFailurePrompt) actions.push(`ci-fixed(${failedChecks.map((check) => check.name).join(",")})`);
   }
 
   return { number: pr.number, actions };

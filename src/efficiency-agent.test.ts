@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
-import { EFFICIENCY_TASK_AGENTS, resolveEfficiencyAgent } from "./efficiency-agent";
+import { EFFICIENCY_TASK_AGENTS, efficiencyAgentSequence, resolveEfficiencyAgent, runEfficiencyAgent } from "./efficiency-agent";
 
 const BASE = {
   commands: { lint: "l", typecheck: "tc", test: "t" },
@@ -12,7 +12,6 @@ const BASE = {
 
 describe("resolveEfficiencyAgent", () => {
   test("既定は composerFast", () => {
-    expect(resolveEfficiencyAgent(BASE, "designRevision")).toBe("composerFast");
     expect(resolveEfficiencyAgent(BASE, "followupReview")).toBe("composerFast");
     expect(resolveEfficiencyAgent(BASE, "gateFix")).toBe("composerFast");
     expect(resolveEfficiencyAgent(BASE, "lintableFix")).toBe("composerFast");
@@ -21,10 +20,35 @@ describe("resolveEfficiencyAgent", () => {
   test("efficiencyAgents で上書きできる", () => {
     const cfg = {
       ...BASE,
-      efficiencyAgents: { designRevision: "codexSol", followupReview: "codexSol" },
+      efficiencyAgents: { followupReview: "codexSol" },
     } satisfies PipelineConfig;
-    expect(resolveEfficiencyAgent(cfg, "designRevision")).toBe("codexSol");
+    expect(resolveEfficiencyAgent(cfg, "followupReview")).toBe("codexSol");
     expect(resolveEfficiencyAgent(cfg, "gateFix")).toBe("composerFast");
+  });
+
+  test("失敗回数に応じ composerFast → composer → codexSol と昇格する", () => {
+    expect(efficiencyAgentSequence(BASE, "gateFix")).toEqual(["composerFast", "composer", "codexSol"]);
+    expect(resolveEfficiencyAgent(BASE, "gateFix", 1)).toBe("composer");
+    expect(resolveEfficiencyAgent(BASE, "gateFix", 2)).toBe("codexSol");
+  });
+
+  test("CLI 失敗時は次のモデルへ昇格する", async () => {
+    const calls: string[] = [];
+    const result = await runEfficiencyAgent(
+      {
+        config: BASE,
+        agent: async (agent) => {
+          calls.push(agent);
+          if (agent === "composerFast") throw new Error("failed");
+          return "ok";
+        },
+      },
+      "babysitFix",
+      "直せ",
+      { cwd: "/work" },
+    );
+    expect(calls).toEqual(["composerFast", "composer"]);
+    expect(result).toEqual({ output: "ok", agent: "composer" });
   });
 
   test("許可エージェント一覧が定義されている", () => {

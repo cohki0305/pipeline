@@ -67,6 +67,9 @@ function makeHarness(opts: {
         return { code: 1, stdout: f.stdout, stderr: "" };
       }
       if (cmd === opts.autoFixCommands?.lint) return OK;
+      if (cmd === "git rev-parse HEAD") {
+        return { code: 0, stdout: "0123456789abcdef0123456789abcdef01234567\n", stderr: "" };
+      }
       if (cmd.startsWith("gh pr create")) return { code: 0, stdout: "https://pr/1\n", stderr: "" };
       return OK;
     },
@@ -146,15 +149,16 @@ describe("runPipeline", () => {
     expect(runPipeline(h.deps, 143)).rejects.toThrow(LoopExceededError);
   });
 
-  test("レビュー指摘は設計書更新経由で実装担当が直す", async () => {
+  test("レビュー指摘は設計書への機械的追記経由で実装担当が直す", async () => {
     const h = makeHarness({
       complexity: "simple",
       reviewOutputs: [findingsOf(1), '{"fixed": ["R1-1"], "remaining": []}'],
     });
     await runPipeline(h.deps, 143);
     expect(h.agentCalls.some((c) => c.prompt.includes("指摘リストを修正"))).toBe(false);
-    const revisionCall = h.agentCalls.find((c) => c.prompt.includes("現行の実装計画"));
-    expect(revisionCall?.agent).toBe("composerFast");
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
+    const revisedDesign = h.written.find((w) => w.path.endsWith("docs/plans/2026-07-19-issue-143.md") && w.content.includes("R1-1"));
+    expect(revisedDesign?.content).toContain("revision: 2");
     const implementCall = h.agentCalls.find((c) => c.prompt.includes("更新された実装計画"));
     expect(implementCall!.agent).toBe("composer");
   });
@@ -195,9 +199,9 @@ describe("runPipeline", () => {
     });
     const result = await runPipeline(h.deps, 143);
     expect(result.prUrl).toBe("https://pr/1");
-    const revisions = h.agentCalls.filter((c) => c.prompt.includes("現行の実装計画"));
-    expect(revisions).toHaveLength(3);
-    expect(revisions.every((c) => c.agent === "composerFast")).toBe(true);
+    const implementations = h.agentCalls.filter((c) => c.prompt.includes("更新された実装計画"));
+    expect(implementations).toHaveLength(3);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
   });
 
   test("減り続けてもラウンド上限で LoopExceededError", async () => {
@@ -296,7 +300,7 @@ describe("runPipeline", () => {
     expect(h.agentCalls.some((c) => c.prompt.includes('"remaining"'))).toBe(true);
   });
 
-  test("resume: 未反映（pending）の指摘は設計改訂からやり直す", async () => {
+  test("resume: 未反映（pending）の指摘は設計追記と実装からやり直す", async () => {
     const outstanding = [
       { id: "R1-1", file: "app/a.ts", line: 1, severity: "high", message: "直せ", lintable: false },
     ];
@@ -314,7 +318,8 @@ describe("runPipeline", () => {
       }),
     });
     await runPipeline(h.deps, 143);
-    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(true);
+    expect(h.agentCalls.some((c) => c.prompt.includes("更新された実装計画"))).toBe(true);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
   });
 
   test("fresh: 設計書があっても issue から設計し直す", async () => {

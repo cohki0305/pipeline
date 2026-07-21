@@ -31,10 +31,14 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
      "worktreeRoot": "../pipeline-worktrees",
      "postWorktreeSetup": "worktree 内で実行する任意のセットアップコマンド",
      "autoFixCommands": { "lint": "bun run lint:fix" },
+     "incrementalCommands": {
+       "lint": "bun run lint:changed",
+       "test": "bun run test:changed"
+     },
      "efficiencyAgents": {
-       "designRevision": "composerFast",
        "followupReview": "composerFast",
-       "gateFix": "composerFast"
+       "gateFix": "composerFast",
+       "babysitFix": "composerFast"
      }
    }
    ```
@@ -55,15 +59,16 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 
 ## 挙動の要点
 
-- **実装への入力は常に設計書のみ**。初回は issue から設計書を作り、レビュー指摘は設計書を更新してから実装に渡す（`lintable: true` の blocking 指摘だけ composer-fast が直接修正して設計ループを bypass）
+- **実装への入力は常に設計書のみ**。初回は issue から設計書を作り、レビュー指摘は設計書へ機械的・冪等に追記してから実装に渡す（設計改訂だけのエージェント呼び出しは行わない。`lintable: true` の blocking 指摘だけ直接修正して設計ループを bypass）
 - 再実行（`--resume`）: 設計書があれば設計スキップ、状態ファイルで実装・品質ゲート・レビュー途中から再開
 - 状態ファイルは worktree の**外**（`<worktreeRoot>/.pipeline-state-issue-<番号>.json`）に置く。worktree 内だとコミットに巻き込まれて生成 PR に混入するため
 - 実装の担当は設計 doc の complexity で決まる: simple → Composer 2.5 / complex → Codex Sol（判断基準は `src/stages/design.ts` の `COMPLEXITY_CRITERIA`）
 - lint/typecheck 違反は Composer 2.5-fast が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）、テスト失敗は実装担当が修正
-- 設計改訂・消し込みレビューは既定で **composer-fast**（`efficiencyAgents` で `codexSol` 等に上書き可）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
-- 修正ループ: 品質ゲートは最大 3 回。レビューは指摘件数が減り続ける限り継続し、停滞（件数が減らない）または 3 ラウンドで停止。レビュー反映後は必ず品質ゲートを再実行してからコミットする
+- 消し込みレビュー・ゲート修正・babysit 修正は既定で **composer-fast**。CLI 失敗や再試行時は `composerFast → composer → codexSol` と段階的に昇格する（`efficiencyAgents` で開始モデルを上書き可）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
+- 修正ループ: 品質ゲートは最大 3 回。`incrementalCommands` があれば途中は変更ファイル向けコマンドを使い、PR 作成・push 前に必ずフルゲートを通す。増分コマンドには改行区切りの変更パスを `PIPELINE_CHANGED_FILES` で渡す
+- 内部レビューは維持し、指摘件数が減り続ける限り継続する。停滞（件数が減らない）または 3 ラウンドで停止する
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）
-- 消し込み方式: 2 巡目以降のレビューは diff 全体の再レビューではなく、前回指摘リスト（id 付き）の fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加のみ
+- 消し込み方式: 2 巡目以降は前回指摘リスト（id 付き）と、修正前 SHA からの差分だけで fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加を行う
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
 - 初回設計・初回フルレビューは `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
@@ -74,8 +79,8 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 
 - **コンフリクト解消は全 open PR が対象**（mergeable: CONFLICTING）→ base ブランチをマージし、コンフリクトは Composer 2.5 が解消 → 品質ゲート → コミット → push
 - **レビューコメント/CI 対応の対象はブランチ単位 or 作成者単位**: `.agent-pipeline.json` の `babysitBranches`（glob 配列）にマッチするブランチ、または `babysitAuthors`（login 配列）にマッチする作成者の PR。`babysitBranches` 省略時は `["issue-*"]`（パイプライン製 PR のみ）。自分の PR を全部対象にしたいときは `"babysitAuthors": ["<自分の login>"]` を設定する。いずれも Composer が自動 push してくることを理解した上で追加する
-- 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）→ Composer 2.5 がコード対応 → 品質ゲート → コミット → push
-- **CI 失敗対応も babysitBranches 対象 PR のみ**: `gh pr view --json statusCheckRollup` で失敗チェックを検知し、`gh run view <run-id> --log-failed` のログを Composer 2.5 に渡して修正 → 品質ゲート → コミット → push。relay の `check_suite` 失敗イベントでも同じ babysit が起動する
+- 最終コミットより新しいレビューコメント（PR コメント・レビュー本文・インラインコメント、投稿者が OWNER/MEMBER/COLLABORATOR のもの）と CI 失敗を同時に取得し、1 回のエージェント呼び出しで一括対応 → 増分ゲート → フルゲート → 1 commit / 1 push
+- **CI 失敗対応も babysitBranches 対象 PR のみ**: `gh pr view --json statusCheckRollup` で失敗チェックを検知し、`gh run view <run-id> --log-failed` のログを段階昇格する修正エージェントへ渡す。relay の `check_suite` 失敗イベントでも同じ babysit が起動する
 - 自分で設定したレビュー bot（Codex クラウドレビュー等、association が NONE になる）を信頼したい場合は `.agent-pipeline.json` に `"babysitTrustedAuthors": ["chatgpt-codex-connector[bot]"]` を追加する。login の `[bot]` サフィックスは有無を問わず照合される。**その bot のコメントはコマンド実行権限を持つエージェントへのプロンプトになるため、自分の管理下にある bot だけを載せること**
 - **保護ブランチの例外**: head が `babysitExcludeBranches`（省略時 `["main", "master", "develop", "release/*"]`）にマッチする PR には、コンフリクト解消も含め一切触らない
 - 対象ブランチの管理コマンド: `pipeline branch [list | add <glob> | remove <glob>]`（プロジェクトルートで実行、`.agent-pipeline.json` を書き換える）

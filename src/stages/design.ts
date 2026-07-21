@@ -1,7 +1,5 @@
-import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Issue } from "../github";
-import { resolveEfficiencyAgent } from "../efficiency-agent";
 import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 import type { Finding } from "./review";
 
@@ -75,43 +73,40 @@ export function nextRevision(content: string): number {
   return m ? Number(m[1]) + 1 : 2;
 }
 
-export function buildDesignRevisionPrompt(currentContent: string, findings: Finding[], revision: number): string {
-  return `あなたはこのリポジトリの設計担当。以下の実装計画とコードレビュー指摘を読み、指摘を反映した更新版の実装計画を Markdown で出力せよ。出力は計画の Markdown のみとし、先頭に必ず次の frontmatter を付ける:
+export function appendReviewFindings(currentContent: string, findings: Finding[]): string {
+  const ids = findings.map((finding) => finding.id ?? `${finding.file}:${finding.line ?? "?"}`).join(",");
+  const marker = `<!-- agent-pipeline-review:${ids} -->`;
+  // state 保存前にプロセスが落ちても、同じ指摘を resume した際に設計追記を重複させない。
+  if (currentContent.includes(marker)) return currentContent;
 
----
-complexity: （現行計画と同じ simple または complex を維持）
-revision: ${revision}
----
+  const revision = nextRevision(currentContent);
+  const withRevision = currentContent.replace(/^---\n([\s\S]*?)\n---/, (_frontmatter, body: string) => {
+    const revisedBody = /(^|\n)revision:\s*\d+/.test(body)
+      ? body.replace(/(^|\n)revision:\s*\d+/, `$1revision: ${revision}`)
+      : `${body}\nrevision: ${revision}`;
+    return `---\n${revisedBody}\n---`;
+  });
 
-計画本文に指摘への対応を反映すること。末尾に「## レビュー反映（revision ${revision}）」セクションを追加し、各指摘 id と対応方針を列挙せよ。
-
-## 現行の実装計画
-
-${currentContent}
-
-## レビュー指摘
-
-${JSON.stringify(findings, null, 2)}`;
+  const items = findings
+    .map(
+      (finding) =>
+        `- ${finding.id ?? "(id なし)"}: ${finding.message}（${finding.file}${finding.line == null ? "" : `:${finding.line}`}）`,
+    )
+    .join("\n");
+  return `${withRevision.trimEnd()}\n\n## レビュー反映（revision ${revision}）\n\n${marker}\n${items}\n`;
 }
 
 export async function reviseDesignFromReview(
   deps: {
-    agent: AgentRunner;
     cwd: string;
-    config: PipelineConfig;
     writeFile(path: string, content: string): Promise<void>;
   },
   design: DesignResult,
   findings: Finding[],
 ): Promise<DesignResult> {
-  const revision = nextRevision(design.docContent);
-  const agent = resolveEfficiencyAgent(deps.config, "designRevision");
-  const output = await deps.agent(agent, buildDesignRevisionPrompt(design.docContent, findings, revision), {
-    cwd: deps.cwd,
-  });
-  const { complexity, content } = parseDesignOutput(output);
+  const content = appendReviewFindings(design.docContent, findings);
   await deps.writeFile(`${deps.cwd}/${design.docPath}`, content);
-  return { complexity, docPath: design.docPath, docContent: content };
+  return { complexity: design.complexity, docPath: design.docPath, docContent: content };
 }
 
 export async function runDesign(

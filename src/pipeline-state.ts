@@ -24,7 +24,7 @@ export type PipelineState = {
   qualityGateInitial?: { fixAttempts: number };
   initialCommit?: true;
   prTitle?: string;
-  review?: { round: number; outstanding: Finding[]; phase?: ReviewPhase };
+  review?: { round: number; outstanding: Finding[]; phase?: ReviewPhase; diffBaseSha?: string };
 };
 
 export type ResumePlan = {
@@ -39,6 +39,8 @@ export type ResumePlan = {
   resumeFollowup: boolean;
   reviewRound?: number;
   outstanding?: Finding[];
+  /** 消し込みレビューで PR 全体ではなく今回の修正差分だけを取得する基準 SHA */
+  diffBaseSha?: string;
 };
 
 /** issue 番号しか入っていない＝一度も進捗を保存していない状態 */
@@ -136,5 +138,6 @@ export function resolveResumePlan(
     resumeFollowup: hasOutstanding && applied,
     reviewRound: state.review?.round,
     outstanding: hasOutstanding ? outstanding : undefined,
+    diffBaseSha: state.review?.diffBaseSha,
   };
 }
