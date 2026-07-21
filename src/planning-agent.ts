@@ -3,6 +3,8 @@ import type { PipelineConfig } from "./config";
 
 export type PlanningAgent = Extract<AgentName, "claude" | "codexSol">;
 
+export const PLANNING_AGENTS: readonly PlanningAgent[] = ["claude", "codexSol"];
+
 export function resolvePlanningAgent(config: PipelineConfig): PlanningAgent {
   return config.planningAgent ?? "claude";
 }
