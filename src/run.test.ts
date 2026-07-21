@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { ExecResult } from "./exec";
-import { PIPELINE_STATE_FILE } from "./pipeline-state";
+import { pipelineStatePath } from "./pipeline-state";
 import { LoopExceededError, runPipeline } from "./run";
 
 const CONFIG = {
@@ -51,7 +51,7 @@ function makeHarness(opts: {
     fileStore[`/wt/issue-143/${opts.existingDesignDoc}`] = DESIGN(opts.complexity);
   }
   if (opts.pipelineState) {
-    fileStore[`/wt/issue-143/${PIPELINE_STATE_FILE}`] = opts.pipelineState;
+    fileStore[pipelineStatePath(CONFIG.worktreeRoot, 143)] = opts.pipelineState;
   }
   const reviews = [...(opts.reviewOutputs ?? ["[]"])];
   const failures = (opts.gateFailures ?? []).map((f) => ({ ...f }));
@@ -94,7 +94,7 @@ function makeHarness(opts: {
       throw new Error(`ENOENT: ${path}`);
     },
     readdir: async (dir: string) => {
-      if (dir === "docs/plans" && opts.existingDesignDoc) return [opts.existingDesignDoc.split("/").pop()!];
+      if (dir === "/wt/issue-143/docs/plans" && opts.existingDesignDoc) return [opts.existingDesignDoc.split("/").pop()!];
       return [];
     },
     unlink: async (path: string) => {
@@ -246,6 +246,75 @@ describe("runPipeline", () => {
     const implementCalls = h.agentCalls.filter((c) => c.prompt.includes("実装計画に従って実装"));
     expect(implementCalls).toHaveLength(0);
     expect(h.execCalls).toContain("run-lint");
+  });
+
+  test("state は worktree の外に書く（git add -A で PR に混入させない）", async () => {
+    const h = makeHarness({ complexity: "simple" });
+    await runPipeline(h.deps, 143);
+    expect(h.written.some((w) => w.path.startsWith("/wt/issue-143/") && w.path.endsWith(".pipeline-state.json"))).toBe(
+      false,
+    );
+    expect(h.fileStore["/wt/.pipeline-state-issue-143.json"]).toBeDefined();
+  });
+
+  test("worktree 内に残る旧 state を引き継いだ上で削除する", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+    });
+    h.fileStore["/wt/issue-143/.pipeline-state.json"] = JSON.stringify({
+      issue: 143,
+      design: { docPath: "docs/plans/2026-07-18-issue-143.md", complexity: "simple" },
+      implement: true,
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.fileStore["/wt/issue-143/.pipeline-state.json"]).toBeUndefined();
+    const implementCalls = h.agentCalls.filter((c) => c.prompt.includes("実装計画に従って実装"));
+    expect(implementCalls).toHaveLength(0);
+  });
+
+  test("resume: 反映済み（applied）の指摘は再修正せず消し込みレビューから再開する", async () => {
+    const outstanding = [
+      { id: "R1-1", file: "app/a.ts", line: 1, severity: "high", message: "直せ", lintable: false },
+    ];
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+      reviewOutputs: ['{"fixed": ["R1-1"], "remaining": []}'],
+      pipelineState: JSON.stringify({
+        issue: 143,
+        design: { docPath: "docs/plans/2026-07-18-issue-143.md", complexity: "simple" },
+        implement: true,
+        initialCommit: true,
+        review: { round: 1, outstanding, phase: "applied" },
+      }),
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
+    expect(h.agentCalls.some((c) => c.prompt.includes('"remaining"'))).toBe(true);
+  });
+
+  test("resume: 未反映（pending）の指摘は設計改訂からやり直す", async () => {
+    const outstanding = [
+      { id: "R1-1", file: "app/a.ts", line: 1, severity: "high", message: "直せ", lintable: false },
+    ];
+    const h = makeHarness({
+      complexity: "simple",
+      worktreeExists: true,
+      existingDesignDoc: "docs/plans/2026-07-18-issue-143.md",
+      reviewOutputs: ['{"fixed": ["R1-1"], "remaining": []}'],
+      pipelineState: JSON.stringify({
+        issue: 143,
+        design: { docPath: "docs/plans/2026-07-18-issue-143.md", complexity: "simple" },
+        implement: true,
+        initialCommit: true,
+        review: { round: 1, outstanding, phase: "pending" },
+      }),
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(true);
   });
 
   test("fresh: 設計書があっても issue から設計し直す", async () => {

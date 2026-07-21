@@ -5,10 +5,12 @@ import type { Github } from "./github";
 import { resolveEfficiencyAgent } from "./efficiency-agent";
 import { safeRef } from "./git-ref";
 import {
-  PIPELINE_STATE_FILE,
+  LEGACY_PIPELINE_STATE_FILE,
   clearPipelineState,
   findIssueDesignDoc,
+  isInitialState,
   loadPipelineState,
+  pipelineStatePath,
   resolveResumePlan,
   savePipelineState,
   type PipelineMode,
@@ -104,12 +106,8 @@ export async function passQualityGate(deps: GateDeps, cwd: string, implementer: 
   }
 }
 
-function pipelineStatePath(cwd: string): string {
-  return `${cwd}/${PIPELINE_STATE_FILE}`;
-}
-
-async function persistState(deps: Deps, cwd: string, state: PipelineState): Promise<void> {
-  await savePipelineState(deps, pipelineStatePath(cwd), state);
+async function persistState(deps: Deps, statePath: string, state: PipelineState): Promise<void> {
+  await savePipelineState(deps, statePath, state);
 }
 
 type DesignDeps = Pick<Deps, "agent" | "config" | "cwd" | "readFile" | "writeFile" | "readdir" | "log" | "date"> & {
@@ -174,13 +172,20 @@ export async function runPipeline(
   const issue = await deps.github.fetchIssue(deps.projectRoot, issueNumber);
   const cwd = await setupWorktree(deps, issueNumber);
   const reportPath = `${deps.config.reportDir}/issue-${issueNumber}.md`;
-  const stateFile = pipelineStatePath(cwd);
+  const stateFile = pipelineStatePath(deps.config.worktreeRoot, issueNumber);
+  const legacyStateFile = `${cwd}/${LEGACY_PIPELINE_STATE_FILE}`;
   deps.log(`worktree: ${cwd}`);
 
   if (mode === "fresh") await clearPipelineState(deps, stateFile);
 
   let state = await loadPipelineState(deps, stateFile, issueNumber);
-  const inferredDesign = await findIssueDesignDoc(deps.readdir, deps.config.designDocDir, issueNumber);
+  if (mode !== "fresh" && isInitialState(state)) {
+    state = await loadPipelineState(deps, legacyStateFile, issueNumber);
+  }
+  // 旧配置の state は worktree 内にあり git add -A で PR に混入するので、引き継いだら必ず消す
+  await clearPipelineState(deps, legacyStateFile);
+
+  const inferredDesign = await findIssueDesignDoc(deps.readdir, cwd, deps.config.designDocDir, issueNumber);
   let plan = resolveResumePlan(mode, state, inferredDesign);
 
   let design: Awaited<ReturnType<typeof runDesign>>;
@@ -190,7 +195,7 @@ export async function runPipeline(
       ...state,
       design: { docPath: design.docPath, complexity: design.complexity },
     };
-    await persistState(deps, cwd, state);
+    await persistState(deps, stateFile, state);
 
     const implementer = implementerFor(design.complexity);
     if (!plan.skipDesign || options.designDocPath) {
@@ -202,7 +207,7 @@ export async function runPipeline(
       await runImplement({ agent: deps.agent, cwd }, design);
       report.addStage("実装", `担当: ${implementer}`);
       state = { ...state, implement: true };
-      await persistState(deps, cwd, state);
+      await persistState(deps, stateFile, state);
     } else if (plan.skipImplement) {
       deps.log("実装をスキップ（前回の変更を再利用）");
     }
@@ -212,7 +217,7 @@ export async function runPipeline(
       report.addStage("品質ゲート", `${gateFixes} 回の修正で通過`);
       await commitAll(deps, cwd, `issue #${issueNumber}: ${issue.title}`);
       state = { ...state, initialCommit: true, qualityGateInitial: { fixAttempts: gateFixes }, review: undefined };
-      await persistState(deps, cwd, state);
+      await persistState(deps, stateFile, state);
       plan = { ...plan, skipQualityGateInitial: true, resumeReview: false };
     }
 
@@ -226,10 +231,15 @@ export async function runPipeline(
       await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
       outstanding = plan.outstanding;
       prevBlocking = outstanding.length;
-      state = { ...state, review: undefined };
-      await persistState(deps, cwd, state);
+      state = { ...state, review: { round: plan.reviewRound ?? 1, outstanding, phase: "applied" } };
+      await persistState(deps, stateFile, state);
       resumeFollowup = true;
       deps.log("レビュー再開（未反映の指摘を設計→実装で処理済み）");
+    } else if (plan.resumeFollowup && plan.outstanding?.length) {
+      outstanding = plan.outstanding;
+      prevBlocking = outstanding.length;
+      resumeFollowup = true;
+      deps.log("レビュー再開（指摘は反映済み・消し込みレビューから）");
     }
 
     for (let round = 0; ; round++) {
@@ -257,12 +267,12 @@ export async function runPipeline(
       if (blocking.length === 0) {
         report.addStage("レビュー", `${round} 回の修正でクリーン（low ${lows.length} 件はレポート送り）`);
         state = { ...state, review: undefined };
-        await persistState(deps, cwd, state);
+        await persistState(deps, stateFile, state);
         break;
       }
       if (blocking.length >= prevBlocking) {
         state = { ...state, review: { round: round + 1, outstanding: blocking } };
-        await persistState(deps, cwd, state);
+        await persistState(deps, stateFile, state);
         throw new LoopExceededError(
           "レビュー",
           `指摘件数が減っていません（前回 ${prevBlocking} 件 → 今回 ${blocking.length} 件）:\n${JSON.stringify(blocking, null, 2)}`,
@@ -270,21 +280,24 @@ export async function runPipeline(
       }
       if (round >= MAX_REVIEW_ROUNDS) {
         state = { ...state, review: { round: round + 1, outstanding: blocking } };
-        await persistState(deps, cwd, state);
+        await persistState(deps, stateFile, state);
         throw new LoopExceededError("レビュー", `ラウンド上限 ${MAX_REVIEW_ROUNDS} に達しました:\n${JSON.stringify(blocking, null, 2)}`);
       }
 
       prevBlocking = blocking.length;
       outstanding = blocking;
-      state = { ...state, review: { round: round + 1, outstanding: blocking } };
-      await persistState(deps, cwd, state);
+      state = { ...state, review: { round: round + 1, outstanding: blocking, phase: "pending" } };
+      await persistState(deps, stateFile, state);
 
       design = await applyReviewFindings(deps, cwd, design, blocking, implementer);
       state = { ...state, design: { docPath: design.docPath, complexity: design.complexity } };
-      await persistState(deps, cwd, state);
+      await persistState(deps, stateFile, state);
 
       await passQualityGate(deps, cwd, implementer);
       await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
+      // 反映がコミットまで済んだ時点で applied に進める。ここで落ちた resume は同じ修正を繰り返さず消し込みから再開する
+      state = { ...state, review: { round: round + 1, outstanding: blocking, phase: "applied" } };
+      await persistState(deps, stateFile, state);
     }
   } catch (e) {
     report.addStage("中断", e instanceof Error ? e.message.slice(0, 500) : String(e));

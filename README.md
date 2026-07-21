@@ -45,7 +45,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 
 プロジェクトルートで `pipeline <issue番号>`
 
-- 既定は **`--resume`**（worktree 内の設計書・`.pipeline-state.json` から中断地点を再開）
+- 既定は **`--resume`**（worktree 内の設計書・状態ファイルから中断地点を再開）
 - **`--fresh`** で設計からやり直す（状態ファイルを削除）
 - `--design <パス>` を付けると issue からの設計を省略し、外部設計書を worktree にコピーして実装に渡す（frontmatter に `complexity: simple|complex` 必須）
 
@@ -56,7 +56,8 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 ## 挙動の要点
 
 - **実装への入力は常に設計書のみ**。初回は issue から設計書を作り、レビュー指摘は設計書を更新してから実装に渡す（`lintable: true` の blocking 指摘だけ composer-fast が直接修正して設計ループを bypass）
-- 再実行（`--resume`）: 設計書があれば設計スキップ、`.pipeline-state.json` で実装・品質ゲート・レビュー途中から再開
+- 再実行（`--resume`）: 設計書があれば設計スキップ、状態ファイルで実装・品質ゲート・レビュー途中から再開
+- 状態ファイルは worktree の**外**（`<worktreeRoot>/.pipeline-state-issue-<番号>.json`）に置く。worktree 内だとコミットに巻き込まれて生成 PR に混入するため
 - 実装の担当は設計 doc の complexity で決まる: simple → Composer 2.5 / complex → Codex Sol（判断基準は `src/stages/design.ts` の `COMPLEXITY_CRITERIA`）
 - lint/typecheck 違反は Composer 2.5-fast が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）、テスト失敗は実装担当が修正
 - 設計改訂・消し込みレビューは既定で **composer-fast**（`efficiencyAgents` で `codexSol` 等に上書き可）。初回設計・初回フルレビューは `planningAgent`（既定 claude）

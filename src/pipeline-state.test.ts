@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "./config";
 import type { Finding } from "./stages/review";
 import {
-  PIPELINE_STATE_FILE,
+  LEGACY_PIPELINE_STATE_FILE,
   findIssueDesignDoc,
   loadPipelineState,
+  pipelineStatePath,
   resolveResumePlan,
   savePipelineState,
   type PipelineState,
@@ -40,18 +41,18 @@ function makeIo(files: Record<string, string> = {}, dirs: Record<string, string[
 
 describe("findIssueDesignDoc", () => {
   test("issue 番号に一致する設計書の相対パスを返す", async () => {
-    const io = makeIo({}, { "docs/plans": ["2026-07-19-issue-143.md", "2026-07-20-issue-144.md"] });
-    expect(await findIssueDesignDoc(io.readdir, CONFIG.designDocDir, 143)).toBe("docs/plans/2026-07-19-issue-143.md");
+    const io = makeIo({}, { "/wt/issue-143/docs/plans": ["2026-07-19-issue-143.md", "2026-07-20-issue-144.md"] });
+    expect(await findIssueDesignDoc(io.readdir, "/wt/issue-143", CONFIG.designDocDir, 143)).toBe("docs/plans/2026-07-19-issue-143.md");
   });
 
   test("複数ある場合はファイル名で最新を選ぶ", async () => {
-    const io = makeIo({}, { "docs/plans": ["2026-07-18-issue-143.md", "2026-07-20-issue-143.md"] });
-    expect(await findIssueDesignDoc(io.readdir, CONFIG.designDocDir, 143)).toBe("docs/plans/2026-07-20-issue-143.md");
+    const io = makeIo({}, { "/wt/issue-143/docs/plans": ["2026-07-18-issue-143.md", "2026-07-20-issue-143.md"] });
+    expect(await findIssueDesignDoc(io.readdir, "/wt/issue-143", CONFIG.designDocDir, 143)).toBe("docs/plans/2026-07-20-issue-143.md");
   });
 
   test("なければ null", async () => {
-    const io = makeIo({}, { "docs/plans": ["2026-07-19-issue-99.md"] });
-    expect(await findIssueDesignDoc(io.readdir, CONFIG.designDocDir, 143)).toBeNull();
+    const io = makeIo({}, { "/wt/issue-143/docs/plans": ["2026-07-19-issue-99.md"] });
+    expect(await findIssueDesignDoc(io.readdir, "/wt/issue-143", CONFIG.designDocDir, 143)).toBeNull();
   });
 });
 
@@ -83,6 +84,7 @@ describe("resolveResumePlan", () => {
       skipImplement: false,
       skipQualityGateInitial: false,
       resumeReview: false,
+      resumeFollowup: false,
     });
   });
 
@@ -146,7 +148,28 @@ describe("resolveResumePlan", () => {
       null,
     );
     expect(plan.resumeReview).toBe(true);
+    expect(plan.resumeFollowup).toBe(false);
     expect(plan.reviewRound).toBe(1);
+    expect(plan.outstanding).toEqual(outstanding);
+  });
+
+  test("反映済み（applied）なら修正を繰り返さず消し込みレビューから再開", () => {
+    const outstanding: Finding[] = [
+      { id: "R1-1", file: "app/a.ts", line: 1, severity: "high", message: "直せ", lintable: false },
+    ];
+    const plan = resolveResumePlan(
+      "resume",
+      {
+        issue: 143,
+        design: { docPath: "docs/plans/x.md", complexity: "simple" },
+        implement: true,
+        initialCommit: true,
+        review: { round: 1, outstanding, phase: "applied" },
+      },
+      null,
+    );
+    expect(plan.resumeReview).toBe(false);
+    expect(plan.resumeFollowup).toBe(true);
     expect(plan.outstanding).toEqual(outstanding);
   });
 
@@ -157,8 +180,14 @@ describe("resolveResumePlan", () => {
   });
 });
 
-describe("PIPELINE_STATE_FILE", () => {
-  test("worktree 直下の固定ファイル名", () => {
-    expect(PIPELINE_STATE_FILE).toBe(".pipeline-state.json");
+describe("pipelineStatePath", () => {
+  test("worktree の外（worktree 置き場の直下）に置く", () => {
+    const path = pipelineStatePath(CONFIG.worktreeRoot, 143);
+    expect(path).toBe("/wt/.pipeline-state-issue-143.json");
+    expect(path.startsWith("/wt/issue-143/")).toBe(false);
+  });
+
+  test("旧配置のファイル名は移行用に残っている", () => {
+    expect(LEGACY_PIPELINE_STATE_FILE).toBe(".pipeline-state.json");
   });
 });
