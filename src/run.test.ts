@@ -170,14 +170,14 @@ describe("runPipeline", () => {
     expect(fixCall!.agent).toBe("composerFast");
   });
 
-  test("test 失敗は実装担当（complex なら codexSol）が修正する", async () => {
+  test("test 失敗は complex でも composer が修正し、直らなければ codexSol へ昇格する", async () => {
     const h = makeHarness({
       complexity: "complex",
-      gateFailures: [{ cmd: "run-test", stdout: "1 fail", times: 1 }],
+      gateFailures: [{ cmd: "run-test", stdout: "1 fail", times: 2 }],
     });
     await runPipeline(h.deps, 143);
-    const fixCall = h.agentCalls.find((c) => c.prompt.includes("テスト失敗"));
-    expect(fixCall!.agent).toBe("codexSol");
+    const fixCalls = h.agentCalls.filter((c) => c.prompt.includes("テスト失敗"));
+    expect(fixCalls.map((c) => c.agent)).toEqual(["composer", "codexSol"]);
   });
 
   test("ゲート修正 3 回で直らなければ LoopExceededError", async () => {
@@ -200,6 +200,16 @@ describe("runPipeline", () => {
     expect(revisedDesign?.content).toContain("revision: 2");
     const implementCall = h.agentCalls.find((c) => c.prompt.includes("更新された実装計画"));
     expect(implementCall!.agent).toBe("composer");
+  });
+
+  test("レビュー反映は complex でも composer 開始、生き残った指摘は codexSol が反映する", async () => {
+    const h = makeHarness({
+      complexity: "complex",
+      reviewOutputs: [findingsOf(2), followupOf(1), followupOf(0)],
+    });
+    await runPipeline(h.deps, 143);
+    const revisions = h.agentCalls.filter((c) => c.prompt.includes("更新された実装計画"));
+    expect(revisions.map((c) => c.agent)).toEqual(["composer", "codexSol"]);
   });
 
   test("lintable blocking 指摘は設計ループを bypass する", async () => {

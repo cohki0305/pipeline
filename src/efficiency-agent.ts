@@ -1,7 +1,7 @@
 import type { AgentName, AgentOpts, AgentRunner } from "./agents";
 import type { PipelineConfig } from "./config";
 
-export type EfficiencyTask = "followupReview" | "gateFix" | "lintableFix" | "babysitFix";
+export type EfficiencyTask = "followupReview" | "gateFix" | "lintableFix" | "babysitFix" | "testFix" | "revisionImplement";
 
 export const EFFICIENCY_TASK_AGENTS = ["composerFast", "composer", "codexSol"] as const;
 export type EfficiencyTaskAgent = (typeof EFFICIENCY_TASK_AGENTS)[number];
@@ -11,6 +11,10 @@ const DEFAULTS: Record<EfficiencyTask, EfficiencyTaskAgent> = {
   gateFix: "composerFast",
   lintableFix: "composerFast",
   babysitFix: "composerFast",
+  // テスト修正とレビュー反映はスコープの狭い差分修正なので complexity に依らず composer 開始。
+  // 直後の消し込みレビュー/ゲート再実行で失敗が検知され、次の attempt で codexSol へ昇格する
+  testFix: "composer",
+  revisionImplement: "composer",
 };
 
 export function efficiencyAgentSequence(config: PipelineConfig, task: EfficiencyTask): AgentName[] {

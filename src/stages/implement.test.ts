@@ -35,7 +35,7 @@ describe("runImplement", () => {
 });
 
 describe("runImplementRevision", () => {
-  test("更新計画を実装担当に渡す", async () => {
+  test("更新計画を指定された実装役に渡す", async () => {
     const calls: { agent: string; prompt: string }[] = [];
     await runImplementRevision(
       {
@@ -45,8 +45,9 @@ describe("runImplementRevision", () => {
         },
         cwd: "/work",
       },
-      { complexity: "simple", docContent: "# 更新計画" },
+      { implementer: "composer", docContent: "# 更新計画" },
     );
+    expect(calls[0]!.agent).toBe("composer");
     expect(calls[0]!.prompt).toContain("更新された実装計画");
   });
 });

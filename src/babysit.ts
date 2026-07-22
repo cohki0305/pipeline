@@ -144,7 +144,7 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
     if (m.code !== 0) {
       deps.log(`#${pr.number}: コンフリクト → composer が解消`);
       await deps.agent("composer", buildConflictPrompt(base), { cwd });
-      await passQualityGate(deps, cwd, "composer");
+      await passQualityGate(deps, cwd);
       if (await hasUncommittedChanges({ exec: deps.exec, cwd })) {
         const conflictCommitMessage = await runCommitMessage(
           { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
@@ -200,9 +200,9 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
       deps.config.incrementalCommands && Object.values(deps.config.incrementalCommands).some(Boolean),
     );
     if (hasIncremental) {
-      await passQualityGate(deps, cwd, agent, { scope: "incremental", changedFiles: files });
+      await passQualityGate(deps, cwd, { scope: "incremental", changedFiles: files });
     }
-    await passQualityGate(deps, cwd, agent);
+    await passQualityGate(deps, cwd);
     if (!(await hasUncommittedChanges({ exec: deps.exec, cwd }, { sinceSha: beforeSha }))) {
       deps.log(`#${pr.number}: 修正不要のためコミットをスキップ`);
       return { number: pr.number, actions };
