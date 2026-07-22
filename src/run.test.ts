@@ -66,6 +66,8 @@ function makeHarness(opts: {
   pipelineState?: string;
   mode?: "resume" | "fresh";
   autoFixCommands?: { lint?: string };
+  currentBranch?: string;
+  dirty?: boolean;
 }) {
   const agentCalls: { agent: string; prompt: string }[] = [];
   const execCalls: string[] = [];
@@ -96,6 +98,12 @@ function makeHarness(opts: {
       if (cmd === opts.autoFixCommands?.lint) return OK;
       if (cmd === "git rev-parse HEAD") {
         return { code: 0, stdout: "0123456789abcdef0123456789abcdef01234567\n", stderr: "" };
+      }
+      if (cmd === "git rev-parse --abbrev-ref HEAD") {
+        return { code: 0, stdout: `${opts.currentBranch ?? "issue-143"}\n`, stderr: "" };
+      }
+      if (cmd === "git status --porcelain") {
+        return { code: 0, stdout: opts.dirty ? " M app/foo.ts\n" : "", stderr: "" };
       }
       if (cmd.startsWith("gh pr create")) return { code: 0, stdout: "https://pr/1\n", stderr: "" };
       return OK;
@@ -458,5 +466,33 @@ describe("runPipeline", () => {
     });
     await runPipeline(h.deps, 143);
     expect(h.execCalls).toContain('git worktree add "/wt/issue-143" issue-143');
+  });
+});
+
+describe("runPipeline --worktree（既存 worktree で作業）", () => {
+  test("worktree を作成せず指定パスで作業し、現在ブランチを push する", async () => {
+    const h = makeHarness({ complexity: "simple", currentBranch: "performance-api" });
+    const result = await runPipeline(h.deps, 220, { worktreePath: "/custom/wt" });
+    expect(result.prUrl).toBe("https://pr/1");
+    expect(h.execCalls.some((c) => c.startsWith("git worktree add"))).toBe(false);
+    expect(h.execCalls.some((c) => c.startsWith("test -d"))).toBe(false);
+    expect(h.execCalls).toContain("git push -u origin performance-api");
+  });
+
+  test("ブランチが baseBranch のままなら拒否する", async () => {
+    const h = makeHarness({ complexity: "simple", currentBranch: "main" });
+    expect(runPipeline(h.deps, 220, { worktreePath: "/custom/wt" })).rejects.toThrow("baseBranch");
+  });
+
+  test("未コミットの変更があれば拒否する", async () => {
+    const h = makeHarness({ complexity: "simple", currentBranch: "performance-api", dirty: true });
+    expect(runPipeline(h.deps, 220, { worktreePath: "/custom/wt" })).rejects.toThrow("未コミット");
+  });
+
+  test("state ファイルは既定 worktree の実行と分離される", async () => {
+    const h = makeHarness({ complexity: "simple", currentBranch: "performance-api" });
+    await runPipeline(h.deps, 220, { worktreePath: "/custom/wt" });
+    expect(h.written.some((w) => w.path === "/wt/.pipeline-state-issue-220--wt.json")).toBe(true);
+    expect(h.written.some((w) => w.path === pipelineStatePath(CONFIG.worktreeRoot, 220))).toBe(false);
   });
 });

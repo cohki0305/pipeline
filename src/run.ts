@@ -53,6 +53,8 @@ export type Deps = {
 export type PipelineOptions = {
   designDocPath?: string;
   mode?: PipelineMode;
+  /** 既存 worktree を作業場所に使う（worktree 作成・postWorktreeSetup をスキップし、現在ブランチを push する） */
+  worktreePath?: string;
 };
 
 function hasIncrementalCommands(config: PipelineConfig): boolean {
@@ -79,6 +81,21 @@ async function setupWorktree(deps: Deps, issueNumber: number): Promise<string> {
     if (s.code !== 0) throw new Error(`worktree セットアップに失敗: ${s.stderr}`);
   }
   return path;
+}
+
+async function resolveCustomWorktree(deps: Deps, path: string): Promise<{ cwd: string; branch: string }> {
+  const branchR = await deps.exec("git rev-parse --abbrev-ref HEAD", { cwd: path });
+  if (branchR.code !== 0) throw new Error(`--worktree が git 作業ツリーではありません: ${branchR.stderr}`);
+  const branch = branchR.stdout.trim();
+  if (branch === deps.config.baseBranch) {
+    throw new Error(`--worktree のブランチが baseBranch (${deps.config.baseBranch}) のままです。フィーチャーブランチへ切り替えてから実行してください`);
+  }
+  const status = await deps.exec("git status --porcelain", { cwd: path });
+  if (status.code !== 0) throw new Error(`git status に失敗: ${status.stderr}`);
+  if (status.stdout.trim() !== "") {
+    throw new Error("--worktree に未コミットの変更があります。commit か stash してから実行してください（git add -A が生成 PR に巻き込むため）");
+  }
+  return { cwd: path, branch };
 }
 
 export async function commitAll(deps: { exec: Exec }, cwd: string, message: string): Promise<void> {
@@ -195,9 +212,14 @@ export async function runPipeline(
   const mode = options.mode ?? "resume";
   const report = new RunReport(issueNumber, deps.date);
   const issue = await deps.github.fetchIssue(deps.projectRoot, issueNumber);
-  const cwd = await setupWorktree(deps, issueNumber);
+  const custom = options.worktreePath ? await resolveCustomWorktree(deps, options.worktreePath) : undefined;
+  const cwd = custom ? custom.cwd : await setupWorktree(deps, issueNumber);
+  const headBranch = custom?.branch ?? `issue-${issueNumber}`;
   const reportPath = `${deps.config.reportDir}/issue-${issueNumber}.md`;
-  const stateFile = pipelineStatePath(deps.config.worktreeRoot, issueNumber);
+  // 既定 worktree の実行と resume 状態が混線しないよう、--worktree 時は場所名付きの state に分離する
+  const stateFile = custom
+    ? `${deps.config.worktreeRoot}/.pipeline-state-issue-${issueNumber}--${custom.cwd.split("/").filter(Boolean).pop()}.json`
+    : pipelineStatePath(deps.config.worktreeRoot, issueNumber);
   const legacyStateFile = `${cwd}/${LEGACY_PIPELINE_STATE_FILE}`;
   deps.log(`worktree: ${cwd}`);
 
@@ -400,7 +422,7 @@ export async function runPipeline(
     { issue, designDocPath: design.docPath, reportPath },
   );
 
-  const push = await deps.exec(`git push -u origin issue-${issueNumber}`, { cwd });
+  const push = await deps.exec(`git push -u origin ${safeRef(headBranch)}`, { cwd });
   if (push.code !== 0) throw new Error(`push に失敗: ${push.stderr}`);
   const prUrl = await deps.github.createPr(cwd, {
     title: prTitle,

@@ -13,6 +13,21 @@ describe("parseMain", () => {
     expect(parseMain(["153", "--fresh"])).toEqual({ cmd: "run", issue: 153, designDocPath: undefined, mode: "fresh" });
   });
 
+  test("--worktree で作業ディレクトリを指定できる", () => {
+    expect(parseMain(["220", "--worktree", "/home/koki/worktrees/meo/performance-api"])).toEqual({
+      cmd: "run",
+      issue: 220,
+      designDocPath: undefined,
+      mode: "resume",
+      worktreePath: "/home/koki/worktrees/meo/performance-api",
+    });
+    expect(parseMain(["220", "--design", "plan.md", "--worktree", "/w"])).toMatchObject({
+      cmd: "run",
+      designDocPath: "plan.md",
+      worktreePath: "/w",
+    });
+  });
+
   test("babysit / babysit-pr / branch / planning-agent のサブコマンド", () => {
     expect(parseMain(["babysit"])).toEqual({ cmd: "babysit" });
     expect(parseMain(["babysit-pr", "194"])).toEqual({ cmd: "babysit-pr", pr: 194 });
