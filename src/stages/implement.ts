@@ -41,9 +41,10 @@ export async function runImplement(
   await deps.agent(implementerFor(args.complexity), buildImplementPrompt(args.docContent), { cwd: deps.cwd });
 }
 
+// レビュー反映は初期実装と違い complexity に直結させない。呼び出し側が昇格ラダーで実装役を決める
 export async function runImplementRevision(
   deps: { agent: AgentRunner; cwd: string },
-  args: { complexity: Complexity; docContent: string },
+  args: { implementer: AgentName; docContent: string },
 ): Promise<void> {
-  await deps.agent(implementerFor(args.complexity), buildRevisionImplementPrompt(args.docContent), { cwd: deps.cwd });
+  await deps.agent(args.implementer, buildRevisionImplementPrompt(args.docContent), { cwd: deps.cwd });
 }

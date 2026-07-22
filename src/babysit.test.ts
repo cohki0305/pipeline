@@ -12,6 +12,9 @@ const CONFIG = {
   worktreeRoot: "/wt",
 } satisfies PipelineConfig;
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
+const COMMIT_MESSAGE = `fix: レビューで検出した境界値処理を安全化
+
+不正な入力でも処理を中断せず、既存データの整合性を維持できるようにする。`;
 
 function makeDeps(opts: {
   prs?: PrSummary[];
@@ -42,11 +45,18 @@ function makeDeps(opts: {
       if (cmd === "git rev-parse HEAD") {
         return { code: 0, stdout: "0123456789abcdef0123456789abcdef01234567\n", stderr: "" };
       }
+      if (cmd.startsWith("git diff --name-only")) {
+        return { code: 0, stdout: "a.ts\n", stderr: "" };
+      }
+      if (cmd === "git ls-files -o --exclude-standard") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
       if (cmd.startsWith("git merge") && opts.mergeFails) return { code: 1, stdout: "CONFLICT", stderr: "" };
       return OK;
     },
     agent: async (agent: string, prompt: string) => {
       agentCalls.push({ agent, prompt });
+      if (prompt.includes("コミットメッセージ")) return COMMIT_MESSAGE;
       return "";
     },
     github: {
@@ -115,6 +125,27 @@ describe("babysitPr", () => {
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
   });
 
+  test("修正不要なコメントだけならエージェント後にコミットしない", async () => {
+    const h = makeDeps({
+      comments: [
+        { author: "koki", authorAssociation: "OWNER", body: "これは質問です", path: null, createdAt: "2026-07-20T05:00:00Z" },
+      ],
+      lastCommit: "2026-07-20T09:00:00+09:00",
+    });
+    const deps = h.deps as { exec: (cmd: string, opts?: { cwd?: string }) => Promise<ExecResult> };
+    const orig = deps.exec;
+    deps.exec = async (cmd, opts) => {
+      if (cmd.startsWith("git diff --name-only")) return { code: 0, stdout: "", stderr: "" };
+      if (cmd === "git ls-files -o --exclude-standard") return { code: 0, stdout: "", stderr: "" };
+      return orig(cmd, opts);
+    };
+    const r = await babysitPr(h.deps, PR);
+    expect(r.actions).toEqual([]);
+    expect(h.agentCalls).toHaveLength(1);
+    expect(h.agentCalls.some((c) => c.prompt.includes("コミットメッセージ"))).toBe(false);
+    expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
+  });
+
   test("CI 失敗時はログを composerFast に渡して修正して push する", async () => {
     const h = makeDeps({
       failedChecks: [
@@ -179,9 +210,10 @@ describe("babysitPr", () => {
       failedCiLog: "test failed",
     });
     const result = await babysitPr(h.deps, PR);
-    expect(h.agentCalls).toHaveLength(1);
+    expect(h.agentCalls).toHaveLength(2);
     expect(h.agentCalls[0]!.prompt).toContain("命名直して");
     expect(h.agentCalls[0]!.prompt).toContain("test failed");
+    expect(h.agentCalls[1]!.prompt).toContain("コミットメッセージ");
     expect(result.actions).toEqual(["comments-addressed(1)", "ci-fixed(test)"]);
   });
 });
@@ -256,7 +288,9 @@ describe("runBabysit", () => {
     const results = await runBabysit(h.deps);
     expect(results).toEqual([{ number: 200, actions: ["conflict-resolved"] }]);
     expect(h.agentCalls.some((c) => c.prompt.includes("コンフリクト"))).toBe(true);
-    expect(h.agentCalls.some((c) => c.prompt.includes("レビューコメント"))).toBe(false);
+    expect(
+      h.agentCalls.some((c) => c.prompt.includes("レビューコメント") && !c.prompt.includes("コミットメッセージ")),
+    ).toBe(false);
   });
 
   test("mergeable が UNKNOWN の PR は確定まで再取得してからコンフリクトを解消する", async () => {

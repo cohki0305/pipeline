@@ -1,4 +1,4 @@
-import type { AgentName, AgentRunner } from "./agents";
+import type { AgentRunner } from "./agents";
 import type { PipelineConfig } from "./config";
 import type { Exec } from "./exec";
 import type { Github } from "./github";
@@ -17,8 +17,10 @@ import {
   type PipelineState,
 } from "./pipeline-state";
 import { RunReport } from "./report";
+import { runCommitMessage } from "./stages/commit-message";
 import { loadDesign, loadExistingDesign, reviseDesignFromReview, runDesign } from "./stages/design";
 import { buildFixPrompt, buildLintableReviewFixPrompt, implementerFor, runImplement, runImplementRevision } from "./stages/implement";
+import { runPrBody } from "./stages/pr-body";
 import { runAutoFixLint, runQualityGate } from "./stages/quality-gate";
 import { type Finding, assignIds, isBlocking, partitionBlocking, runFollowupReview, runReview } from "./stages/review";
 
@@ -92,7 +94,6 @@ export type GateDeps = { exec: Exec; config: PipelineConfig; agent: AgentRunner;
 export async function passQualityGate(
   deps: GateDeps,
   cwd: string,
-  implementer: AgentName,
   options: { scope?: "full" | "incremental"; changedFiles?: string[] } = {},
 ): Promise<number> {
   for (let attempt = 0; ; attempt++) {
@@ -109,7 +110,7 @@ export async function passQualityGate(
       }
     }
 
-    const fixer = gate.kind === "test" ? implementer : resolveEfficiencyAgent(deps.config, "gateFix", attempt);
+    const fixer = resolveEfficiencyAgent(deps.config, gate.kind === "test" ? "testFix" : "gateFix", attempt);
     deps.log(`品質ゲート違反 (${gate.kind}) → ${fixer} が修正 (${attempt + 1}/${MAX_GATE_FIXES})`);
     await deps.agent(fixer, buildFixPrompt(gate.kind ?? "lint", JSON.stringify(gate.violations, null, 2)), { cwd });
   }
@@ -157,7 +158,7 @@ async function applyReviewFindings(
   cwd: string,
   design: Awaited<ReturnType<typeof runDesign>>,
   blocking: Finding[],
-  implementer: AgentName,
+  revisionAttempt: number,
 ): Promise<Awaited<ReturnType<typeof runDesign>>> {
   const { lintable, structural } = partitionBlocking(blocking);
   if (lintable.length > 0) {
@@ -166,7 +167,7 @@ async function applyReviewFindings(
     deps.log(`lintable 指摘 ${lintable.length} 件 → ${fixer} が直接修正（設計ループ bypass）`);
   }
   if (structural.length > 0) {
-    design = await reviseAndImplement(deps, cwd, design, structural, implementer);
+    design = await reviseAndImplement(deps, cwd, design, structural, revisionAttempt);
   }
   return design;
 }
@@ -176,11 +177,13 @@ async function reviseAndImplement(
   cwd: string,
   design: Awaited<ReturnType<typeof runDesign>>,
   findings: Finding[],
-  implementer: AgentName,
+  revisionAttempt: number,
 ): Promise<Awaited<ReturnType<typeof runDesign>>> {
   const revised = await reviseDesignFromReview({ cwd, writeFile: deps.writeFile }, design, findings);
+  // 2 周目以降の指摘は前回の反映を生き延びたものなので、ラダーの次段（codexSol）へ昇格する
+  const implementer = resolveEfficiencyAgent(deps.config, "revisionImplement", revisionAttempt);
   deps.log(`レビュー指摘 ${findings.length} 件 → 設計書へ機械的に追記 → ${implementer} が実装`);
-  await runImplementRevision({ agent: deps.agent, cwd }, revised);
+  await runImplementRevision({ agent: deps.agent, cwd }, { implementer, docContent: revised.docContent });
   return revised;
 }
 
@@ -209,6 +212,7 @@ export async function runPipeline(
 
   const inferredDesign = await findIssueDesignDoc(deps.readdir, cwd, deps.config.designDocDir, issueNumber);
   let plan = resolveResumePlan(mode, state, inferredDesign);
+  let prTitle = plan.prTitle ?? `issue #${issueNumber}: ${issue.title}`;
 
   let design: Awaited<ReturnType<typeof runDesign>>;
   let usedIncrementalGate = false;
@@ -236,10 +240,25 @@ export async function runPipeline(
     }
 
     if (!plan.skipQualityGateInitial) {
-      const gateFixes = await passQualityGate(deps, cwd, implementer);
+      const gateFixes = await passQualityGate(deps, cwd);
       report.addStage("品質ゲート", `${gateFixes} 回の修正で通過`);
-      await commitAll(deps, cwd, `issue #${issueNumber}: ${issue.title}`);
-      state = { ...state, initialCommit: true, qualityGateInitial: { fixAttempts: gateFixes }, review: undefined };
+      const initialCommitMessage = await runCommitMessage(
+        { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
+        {
+          reference: { kind: "issue", number: issueNumber },
+          purpose: "initial",
+          context: `${issue.title}\n\n${issue.body}`,
+        },
+      );
+      prTitle = initialCommitMessage.split("\n", 1)[0]!;
+      await commitAll(deps, cwd, initialCommitMessage);
+      state = {
+        ...state,
+        initialCommit: true,
+        qualityGateInitial: { fixAttempts: gateFixes },
+        prTitle,
+        review: undefined,
+      };
       await persistState(deps, stateFile, state);
       plan = { ...plan, skipQualityGateInitial: true, resumeReview: false };
     }
@@ -251,12 +270,20 @@ export async function runPipeline(
 
     if (plan.resumeReview && plan.outstanding?.length) {
       followupDiffBaseSha = plan.diffBaseSha ?? (await currentHeadSha(deps, cwd));
-      design = await applyReviewFindings(deps, cwd, design, plan.outstanding, implementer);
+      design = await applyReviewFindings(deps, cwd, design, plan.outstanding, (plan.reviewRound ?? 1) - 1);
       const changedFiles = await changedFilesSince(deps, cwd, followupDiffBaseSha);
       const scope = hasIncrementalCommands(deps.config) ? "incremental" : "full";
       usedIncrementalGate ||= scope === "incremental";
-      await passQualityGate(deps, cwd, implementer, { scope, changedFiles });
-      await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
+      await passQualityGate(deps, cwd, { scope, changedFiles });
+      const reviewCommitMessage = await runCommitMessage(
+        { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
+        {
+          reference: { kind: "issue", number: issueNumber },
+          purpose: "review",
+          context: JSON.stringify(plan.outstanding, null, 2),
+        },
+      );
+      await commitAll(deps, cwd, reviewCommitMessage);
       outstanding = plan.outstanding;
       prevBlocking = outstanding.length;
       state = {
@@ -325,15 +352,23 @@ export async function runPipeline(
       };
       await persistState(deps, stateFile, state);
 
-      design = await applyReviewFindings(deps, cwd, design, blocking, implementer);
+      design = await applyReviewFindings(deps, cwd, design, blocking, round);
       state = { ...state, design: { docPath: design.docPath, complexity: design.complexity } };
       await persistState(deps, stateFile, state);
 
       const changedFiles = await changedFilesSince(deps, cwd, followupDiffBaseSha);
       const scope = hasIncrementalCommands(deps.config) ? "incremental" : "full";
       usedIncrementalGate ||= scope === "incremental";
-      await passQualityGate(deps, cwd, implementer, { scope, changedFiles });
-      await commitAll(deps, cwd, `issue #${issueNumber}: レビュー反映を実装`);
+      await passQualityGate(deps, cwd, { scope, changedFiles });
+      const reviewCommitMessage = await runCommitMessage(
+        { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
+        {
+          reference: { kind: "issue", number: issueNumber },
+          purpose: "review",
+          context: JSON.stringify(blocking, null, 2),
+        },
+      );
+      await commitAll(deps, cwd, reviewCommitMessage);
       // 反映がコミットまで済んだ時点で applied に進める。ここで落ちた resume は同じ修正を繰り返さず消し込みから再開する
       state = {
         ...state,
@@ -343,7 +378,7 @@ export async function runPipeline(
     }
 
     // 修正ループ中は増分ゲートを使えるが、公開前には必ずフルゲートで安全性を確認する。
-    if (usedIncrementalGate) await passQualityGate(deps, cwd, implementerFor(design.complexity));
+    if (usedIncrementalGate) await passQualityGate(deps, cwd);
   } catch (e) {
     report.addStage("中断", e instanceof Error ? e.message.slice(0, 500) : String(e));
     await deps.writeFile(`${cwd}/${reportPath}`, report.render());
@@ -354,13 +389,22 @@ export async function runPipeline(
   }
 
   await deps.writeFile(`${cwd}/${reportPath}`, report.render());
-  await commitAll(deps, cwd, `issue #${issueNumber}: 実行レポート`);
+  await commitAll(
+    deps,
+    cwd,
+    `docs: issue #${issueNumber} の検証結果と残課題を記録\n\n品質ゲートと内部レビューの結果、未対応の low 指摘と lint 化候補を追跡できるようにする。\n\n関連: #${issueNumber}`,
+  );
+
+  const prBody = await runPrBody(
+    { agent: deps.agent, config: deps.config, exec: deps.exec, readFile: deps.readFile, cwd },
+    { issue, designDocPath: design.docPath, reportPath },
+  );
 
   const push = await deps.exec(`git push -u origin issue-${issueNumber}`, { cwd });
   if (push.code !== 0) throw new Error(`push に失敗: ${push.stderr}`);
   const prUrl = await deps.github.createPr(cwd, {
-    title: `issue #${issueNumber}: ${issue.title}`,
-    body: `Closes #${issueNumber}\n\n- 設計: ${design.docPath}\n- 実行レポート: ${reportPath}`,
+    title: prTitle,
+    body: prBody,
     base: deps.config.baseBranch,
   });
   return { prUrl, reportPath };

@@ -17,6 +17,12 @@ describe("resolveEfficiencyAgent", () => {
     expect(resolveEfficiencyAgent(BASE, "lintableFix")).toBe("composerFast");
   });
 
+  test("テスト修正とレビュー反映は composer 開始で codexSol に昇格する", () => {
+    expect(efficiencyAgentSequence(BASE, "testFix")).toEqual(["composer", "codexSol"]);
+    expect(efficiencyAgentSequence(BASE, "revisionImplement")).toEqual(["composer", "codexSol"]);
+    expect(resolveEfficiencyAgent(BASE, "revisionImplement", 2)).toBe("codexSol");
+  });
+
   test("efficiencyAgents で上書きできる", () => {
     const cfg = {
       ...BASE,

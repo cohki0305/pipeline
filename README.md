@@ -62,16 +62,19 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - **実装への入力は常に設計書のみ**。初回は issue から設計書を作り、レビュー指摘は設計書へ機械的・冪等に追記してから実装に渡す（設計改訂だけのエージェント呼び出しは行わない。`lintable: true` の blocking 指摘だけ直接修正して設計ループを bypass）
 - 再実行（`--resume`）: 設計書があれば設計スキップ、状態ファイルで実装・品質ゲート・レビュー途中から再開
 - 状態ファイルは worktree の**外**（`<worktreeRoot>/.pipeline-state-issue-<番号>.json`）に置く。worktree 内だとコミットに巻き込まれて生成 PR に混入するため
-- 実装の担当は設計 doc の complexity で決まる: simple → Composer 2.5 / complex → Codex Sol（判断基準は `src/stages/design.ts` の `COMPLEXITY_CRITERIA`）
-- lint/typecheck 違反は Composer 2.5-fast が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）、テスト失敗は実装担当が修正
+- **初期実装**の担当は設計 doc の complexity で決まる: simple → Composer 2.5 / complex → Codex Sol（判断基準は `src/stages/design.ts` の `COMPLEXITY_CRITERIA`）
+- lint/typecheck 違反は Composer 2.5-fast が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）
+- **テスト失敗の修正とレビュー指摘の反映は complex でも Composer 2.5 開始**（`testFix` / `revisionImplement`）。直らずに次の attempt / レビューラウンドへ進んだら codexSol に昇格する。スコープの狭い差分修正で、直後の消し込みレビュー・ゲート再実行が答え合わせになるため
 - 消し込みレビュー・ゲート修正・babysit 修正は既定で **composer-fast**。CLI 失敗や再試行時は `composerFast → composer → codexSol` と段階的に昇格する（`efficiencyAgents` で開始モデルを上書き可）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
 - 修正ループ: 品質ゲートは最大 3 回。`incrementalCommands` があれば途中は変更ファイル向けコマンドを使い、PR 作成・push 前に必ずフルゲートを通す。増分コマンドには改行区切りの変更パスを `PIPELINE_CHANGED_FILES` で渡す
 - 内部レビューは維持し、指摘件数が減り続ける限り継続する。停滞（件数が減らない）または 3 ラウンドで停止する
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）
 - 消し込み方式: 2 巡目以降は前回指摘リスト（id 付き）と、修正前 SHA からの差分だけで fixed/unfixed 判定 + 修正が持ち込んだ新規問題の追加を行う
 - レビューで「静的検出可能」と判定された指摘は実行レポート（`reportDir/issue-<番号>.md`）の「custom lint 化候補」に蓄積される
+- 実装・レビュー修正・babysit・コンフリクト解消のコミットは、planning agent が実際の未コミット差分を読み、具体的な変更内容と WHY を含む Conventional Commit 形式で生成する。「レビュー反映を実装」「レビューコメントに対応」など作業名だけのメッセージは拒否する
+- PR タイトルは初回実装コミットの subject を使う。PR 本文は最終 diff・設計書・実行レポートを planning agent が読み、「変更概要」「実装方針」「主な変更」「検証」「レビュー観点」「関連ドキュメント」を含むレビュー用 Markdown として生成する。必須セクション・順序・最低限の情報量を満たさない本文は拒否する
 - codex はグローバル設定に依らず `-s workspace-write` サンドボックスで実行する。codex / cursor-agent は stdin を読みにいく仕様のため、コマンドテンプレートは `/dev/null` リダイレクトを含む（`src/agents.ts` の `AGENT_COMMANDS` を参照）
-- 初回設計・初回フルレビューは `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
+- 初回設計・初回フルレビュー・コミットメッセージ・PR 本文は `planningAgent`（既定 claude / `codexSol`）。`reviewModel` は claude 選択時のみ
 
 ## babysit（open PR の見張り）
 
