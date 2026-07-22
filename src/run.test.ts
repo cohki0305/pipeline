@@ -168,14 +168,14 @@ describe("runPipeline", () => {
     });
   });
 
-  test("lint 失敗は composerFast が修正する", async () => {
+  test("lint 失敗は composer が修正する", async () => {
     const h = makeHarness({
       complexity: "complex",
       gateFailures: [{ cmd: "run-lint", stdout: "app/a.ts:1 x", times: 1 }],
     });
     await runPipeline(h.deps, 143);
     const fixCall = h.agentCalls.find((c) => c.prompt.includes("lint/型エラー"));
-    expect(fixCall!.agent).toBe("composerFast");
+    expect(fixCall!.agent).toBe("composer");
   });
 
   test("test 失敗は complex でも composer が修正し、直らなければ codexSol へ昇格する", async () => {
@@ -230,7 +230,7 @@ describe("runPipeline", () => {
     });
     await runPipeline(h.deps, 143);
     expect(h.agentCalls.some((c) => c.prompt.includes("現行の実装計画"))).toBe(false);
-    expect(h.agentCalls.some((c) => c.agent === "composerFast" && c.prompt.includes("静的解析可能"))).toBe(true);
+    expect(h.agentCalls.some((c) => c.agent === "composer" && c.prompt.includes("静的解析可能"))).toBe(true);
   });
 
   test("lint 自動修正後にゲートが通れば composer を呼ばない", async () => {
@@ -452,7 +452,7 @@ describe("runPipeline", () => {
       return orig(cmd);
     };
     await runPipeline(h.deps, 143);
-    const lintFixes = h.agentCalls.filter((c) => c.agent === "composerFast" && c.prompt.includes("lint/型エラー"));
+    const lintFixes = h.agentCalls.filter((c) => c.agent === "composer" && c.prompt.includes("lint/型エラー"));
     expect(lintFixes).toHaveLength(1);
     expect(lintCalls).toBeGreaterThanOrEqual(3);
   });

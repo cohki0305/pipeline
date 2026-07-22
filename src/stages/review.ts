@@ -2,7 +2,7 @@ import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
 import { safeRef } from "../git-ref";
-import { nextEfficiencyAgent, runEfficiencyAgent } from "../efficiency-agent";
+import { runEfficiencyAgent } from "../efficiency-agent";
 import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 
 export type Severity = "critical" | "high" | "medium" | "low";
@@ -154,8 +154,8 @@ export async function runFollowupReview(
   try {
     return parseFollowupOutput(result.output);
   } catch {
-    const repairAgent = nextEfficiencyAgent(deps.config, "followupReview", result.agent);
-    const repaired = await deps.agent(repairAgent, buildFollowupJsonRepairPrompt(result.output), { cwd: deps.cwd });
+  // JSON 修復はモデル能力不足ではないので、同じエージェントで再試行する
+    const repaired = await deps.agent(result.agent, buildFollowupJsonRepairPrompt(result.output), { cwd: deps.cwd });
     return parseFollowupOutput(repaired);
   }
 }

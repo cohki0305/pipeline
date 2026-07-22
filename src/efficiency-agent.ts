@@ -7,10 +7,10 @@ export const EFFICIENCY_TASK_AGENTS = ["composerFast", "composer", "codexSol"] a
 export type EfficiencyTaskAgent = (typeof EFFICIENCY_TASK_AGENTS)[number];
 
 const DEFAULTS: Record<EfficiencyTask, EfficiencyTaskAgent> = {
-  followupReview: "composerFast",
-  gateFix: "composerFast",
-  lintableFix: "composerFast",
-  babysitFix: "composerFast",
+  followupReview: "composer",
+  gateFix: "composer",
+  lintableFix: "composer",
+  babysitFix: "composer",
   // テスト修正とレビュー反映はスコープの狭い差分修正なので complexity に依らず composer 開始。
   // 直後の消し込みレビュー/ゲート再実行で失敗が検知され、次の attempt で codexSol へ昇格する
   testFix: "composer",

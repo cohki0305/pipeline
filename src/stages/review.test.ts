@@ -153,7 +153,7 @@ describe("消し込みレビュー", () => {
       {
         exec: async () => ({ code: 0, stdout: "diff --git a/x", stderr: "" }),
         agent: async (agent, prompt) => {
-          expect(agent).toBe("composerFast");
+          expect(agent).toBe("composer");
           expect(prompt).toContain("R1-1");
           return '{"fixed": ["R1-1"], "remaining": []}';
         },
@@ -191,7 +191,7 @@ describe("消し込みレビュー", () => {
         agent: async (agent, prompt) => {
           calls++;
           if (calls === 1) {
-            expect(agent).toBe("composerFast");
+            expect(agent).toBe("composer");
             return '{"fixed":["R1-1"],"remaining":[{"id":null';
           }
           expect(agent).toBe("composer");
