@@ -11,10 +11,10 @@ const BASE = {
 } satisfies PipelineConfig;
 
 describe("resolveEfficiencyAgent", () => {
-  test("既定は composerFast", () => {
-    expect(resolveEfficiencyAgent(BASE, "followupReview")).toBe("composerFast");
-    expect(resolveEfficiencyAgent(BASE, "gateFix")).toBe("composerFast");
-    expect(resolveEfficiencyAgent(BASE, "lintableFix")).toBe("composerFast");
+  test("既定は composer（Composer 2.5 Standard）", () => {
+    expect(resolveEfficiencyAgent(BASE, "followupReview")).toBe("composer");
+    expect(resolveEfficiencyAgent(BASE, "gateFix")).toBe("composer");
+    expect(resolveEfficiencyAgent(BASE, "lintableFix")).toBe("composer");
   });
 
   test("テスト修正とレビュー反映は composer 開始で codexSol に昇格する", () => {
@@ -29,12 +29,12 @@ describe("resolveEfficiencyAgent", () => {
       efficiencyAgents: { followupReview: "codexSol" },
     } satisfies PipelineConfig;
     expect(resolveEfficiencyAgent(cfg, "followupReview")).toBe("codexSol");
-    expect(resolveEfficiencyAgent(cfg, "gateFix")).toBe("composerFast");
+    expect(resolveEfficiencyAgent(cfg, "gateFix")).toBe("composer");
   });
 
-  test("失敗回数に応じ composerFast → composer → codexSol と昇格する", () => {
-    expect(efficiencyAgentSequence(BASE, "gateFix")).toEqual(["composerFast", "composer", "codexSol"]);
-    expect(resolveEfficiencyAgent(BASE, "gateFix", 1)).toBe("composer");
+  test("失敗回数に応じ composer → codexSol と昇格する", () => {
+    expect(efficiencyAgentSequence(BASE, "gateFix")).toEqual(["composer", "codexSol"]);
+    expect(resolveEfficiencyAgent(BASE, "gateFix", 1)).toBe("codexSol");
     expect(resolveEfficiencyAgent(BASE, "gateFix", 2)).toBe("codexSol");
   });
 
@@ -45,7 +45,7 @@ describe("resolveEfficiencyAgent", () => {
         config: BASE,
         agent: async (agent) => {
           calls.push(agent);
-          if (agent === "composerFast") throw new Error("failed");
+          if (agent === "composer") throw new Error("failed");
           return "ok";
         },
       },
@@ -53,8 +53,8 @@ describe("resolveEfficiencyAgent", () => {
       "直せ",
       { cwd: "/work" },
     );
-    expect(calls).toEqual(["composerFast", "composer"]);
-    expect(result).toEqual({ output: "ok", agent: "composer" });
+    expect(calls).toEqual(["composer", "codexSol"]);
+    expect(result).toEqual({ output: "ok", agent: "codexSol" });
   });
 
   test("許可エージェント一覧が定義されている", () => {

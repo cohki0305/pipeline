@@ -101,7 +101,7 @@ describe("babysitPr", () => {
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
 
-  test("新規コメントに composerFast が対応して push する", async () => {
+  test("新規コメントに composer が対応して push する", async () => {
     const h = makeDeps({
       comments: [
         { author: "koki", authorAssociation: "OWNER", body: "命名直して", path: "a.ts", createdAt: "2026-07-20T05:00:00Z" },
@@ -110,7 +110,7 @@ describe("babysitPr", () => {
     });
     const r = await babysitPr(h.deps, PR);
     expect(r.actions).toEqual(["comments-addressed(1)"]);
-    expect(h.agentCalls[0]!.agent).toBe("composerFast");
+    expect(h.agentCalls[0]!.agent).toBe("composer");
     expect(h.agentCalls[0]!.prompt).toContain("命名直して");
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });
@@ -146,7 +146,7 @@ describe("babysitPr", () => {
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
   });
 
-  test("CI 失敗時はログを composerFast に渡して修正して push する", async () => {
+  test("CI 失敗時はログを composer に渡して修正して push する", async () => {
     const h = makeDeps({
       failedChecks: [
         {
@@ -159,7 +159,7 @@ describe("babysitPr", () => {
     });
     const r = await babysitPr(h.deps, PR);
     expect(r.actions).toEqual(["ci-fixed(test-typescript)"]);
-    expect(h.agentCalls[0]!.agent).toBe("composerFast");
+    expect(h.agentCalls[0]!.agent).toBe("composer");
     expect(h.agentCalls[0]!.prompt).toContain("lint:test-co-location failed");
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(true);
   });

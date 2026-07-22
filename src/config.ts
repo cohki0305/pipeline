@@ -24,7 +24,7 @@ export type PipelineConfig = {
   planningAgent?: PlanningAgent;
   /** lint 失敗時に composer を呼ぶ前に実行する自動修正コマンド */
   autoFixCommands?: { lint?: string };
-  /** 設計改訂・消し込みレビュー・ゲート修正など安価タスクの担当。未指定は composerFast */
+  /** 設計改訂・消し込みレビュー・ゲート修正など安価タスクの担当。未指定は composer（Composer 2.5 Standard） */
   efficiencyAgents?: Partial<Record<EfficiencyTask, EfficiencyTaskAgent>>;
 };
 
