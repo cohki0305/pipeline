@@ -7,9 +7,9 @@ export type Complexity = "simple" | "complex";
 export type DesignResult = { complexity: Complexity; docPath: string; docContent: string };
 
 // ユーザー定義の判断基準。実装時にユーザーに書いてもらう（フォールバック値）
-export const COMPLEXITY_CRITERIA = `- simple: リポジトリ内に同型の実装例があり、それを模倣すれば書ける変更（typo・文言修正、既存 lint への追随、既存テーブルへの単純な CRUD 追加、既存エンドポイントと同型のエンドポイント追加、設定値・定数の追加）。ファイル数の多さだけを complex の根拠にしない
-- complex: 次のいずれかに該当する場合のみ: 新しい抽象・インターフェースの導入 / DB マイグレーションやデータ移行 / 並行処理・トランザクション境界の変更 / 外部 API との新規連携 / 既存の公開挙動を変えうる横断的リファクタリング
-- 判断手順: complex の各条件に該当するか一つずつ確認し、該当したものを計画の冒頭に列挙する。ひとつも該当しなければ simple とする（「なんとなく難しそう」は complex の根拠にしない）`;
+export const COMPLEXITY_CRITERIA = `- simple がデフォルト。新機能追加・新しいエンドポイントや画面・外部 API 連携・複数ファイルにまたがる変更・多少の設計判断を含む実装もすべて simple とする
+- complex: テストで失敗を検知しにくい、または事故時の巻き戻しが難しい変更のみ。具体的には次のいずれかに該当する場合だけ: DB マイグレーションや既存データの移行・変換 / 並行処理・排他制御・トランザクション境界の変更 / 認証・認可・決済など事故時の影響が重大な箇所の変更
+- 判断手順: complex の各条件に該当するか一つずつ確認し、該当したものを計画の冒頭に列挙する。ひとつも該当しなければ simple とする（規模の大きさ・設計判断の有無・難しそうという印象は complex の根拠にしない）`;
 
 export function buildDesignPrompt(issue: Issue): string {
   return `あなたはこのリポジトリの設計担当。リポジトリを調査した上で、以下の GitHub issue の実装計画を Markdown で出力せよ。出力は計画の Markdown のみとし、先頭に必ず次の frontmatter を付ける:
