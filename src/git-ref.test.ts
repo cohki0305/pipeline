@@ -8,6 +8,7 @@ describe("safeRef", () => {
     expect(safeRef("feature/x.y_z-2")).toBe("feature/x.y_z-2");
     expect(safeRef("feat/#140-gbp-profile-real-sync")).toBe("feat/#140-gbp-profile-real-sync");
     expect(safeRef("renovate/@types-node")).toBe("renovate/@types-node");
+    expect(safeRef("worktree-feat+50-score-breakdown")).toBe("worktree-feat+50-score-breakdown");
   });
 
   test("# や @ が先頭のブランチ名は拒否する", () => {
