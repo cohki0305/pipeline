@@ -55,6 +55,46 @@ export function buildCommitMessagePrompt(args: {
 `;
 }
 
+export async function hasUncommittedChanges(
+  deps: { exec: Exec; cwd: string },
+  opts: { sinceSha?: string } = {},
+): Promise<boolean> {
+  if (opts.sinceSha) {
+    const [diff, untracked] = await Promise.all([
+      deps.exec(`git diff --name-only ${opts.sinceSha}`, { cwd: deps.cwd }),
+      deps.exec("git ls-files -o --exclude-standard", { cwd: deps.cwd }),
+    ]);
+    if (diff.code !== 0) throw new Error(`変更の有無確認に失敗: ${diff.stderr}`);
+    if (untracked.code !== 0) throw new Error(`未追跡ファイルの確認に失敗: ${untracked.stderr}`);
+    return Boolean(diff.stdout.trim() || untracked.stdout.trim());
+  }
+  const status = await deps.exec("git status --porcelain", { cwd: deps.cwd });
+  if (status.code !== 0) throw new Error(`変更の有無確認に失敗: ${status.stderr}`);
+  return Boolean(status.stdout.trim());
+}
+
+export async function collectCommitEvidence(deps: { exec: Exec; cwd: string }): Promise<string> {
+  const untracked = await deps.exec("git ls-files -o --exclude-standard", { cwd: deps.cwd });
+  if (untracked.code !== 0) throw new Error(`未追跡ファイルの確認に失敗: ${untracked.stderr}`);
+  if (untracked.stdout.trim()) {
+    const add = await deps.exec("git add -N .", { cwd: deps.cwd });
+    if (add.code !== 0) throw new Error(`未追跡ファイルの intent-to-add に失敗: ${add.stderr}`);
+  }
+  const [status, unstaged, staged] = await Promise.all([
+    deps.exec("git status --short", { cwd: deps.cwd }),
+    deps.exec("git diff --no-ext-diff", { cwd: deps.cwd }),
+    deps.exec("git diff --cached --no-ext-diff", { cwd: deps.cwd }),
+  ]);
+  if (status.code !== 0 || unstaged.code !== 0 || staged.code !== 0) {
+    throw new Error(`コミット用差分の取得に失敗: ${status.stderr || unstaged.stderr || staged.stderr}`);
+  }
+  return [
+    `### git status --short\n${status.stdout}`,
+    `### git diff\n${unstaged.stdout}`,
+    `### git diff --cached\n${staged.stdout}`,
+  ].join("\n").slice(0, 50_000);
+}
+
 export function validateCommitMessage(output: string): string {
   const message = output.trim();
   const lines = message.split("\n");
@@ -85,19 +125,7 @@ export async function runCommitMessage(
   deps: { agent: AgentRunner; config: PipelineConfig; exec: Exec; cwd: string },
   args: { reference: CommitReference; purpose: CommitPurpose; context?: string },
 ): Promise<string> {
-  const [status, unstaged, staged] = await Promise.all([
-    deps.exec("git status --short", { cwd: deps.cwd }),
-    deps.exec("git diff --no-ext-diff", { cwd: deps.cwd }),
-    deps.exec("git diff --cached --no-ext-diff", { cwd: deps.cwd }),
-  ]);
-  if (status.code !== 0 || unstaged.code !== 0 || staged.code !== 0) {
-    throw new Error(`コミット用差分の取得に失敗: ${status.stderr || unstaged.stderr || staged.stderr}`);
-  }
-  const evidence = [
-    `### git status --short\n${status.stdout}`,
-    `### git diff\n${unstaged.stdout}`,
-    `### git diff --cached\n${staged.stdout}`,
-  ].join("\n").slice(0, 50_000);
+  const evidence = await collectCommitEvidence(deps);
   const agent = resolvePlanningAgent(deps.config);
   const output = await deps.agent(agent, buildCommitMessagePrompt({ ...args, evidence }), {
     cwd: deps.cwd,

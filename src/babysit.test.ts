@@ -45,6 +45,12 @@ function makeDeps(opts: {
       if (cmd === "git rev-parse HEAD") {
         return { code: 0, stdout: "0123456789abcdef0123456789abcdef01234567\n", stderr: "" };
       }
+      if (cmd.startsWith("git diff --name-only")) {
+        return { code: 0, stdout: "a.ts\n", stderr: "" };
+      }
+      if (cmd === "git ls-files -o --exclude-standard") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
       if (cmd.startsWith("git merge") && opts.mergeFails) return { code: 1, stdout: "CONFLICT", stderr: "" };
       return OK;
     },
@@ -116,6 +122,27 @@ describe("babysitPr", () => {
     const r = await babysitPr(h.deps, PR);
     expect(r.actions).toEqual([]);
     expect(h.agentCalls).toHaveLength(0);
+    expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
+  });
+
+  test("修正不要なコメントだけならエージェント後にコミットしない", async () => {
+    const h = makeDeps({
+      comments: [
+        { author: "koki", authorAssociation: "OWNER", body: "これは質問です", path: null, createdAt: "2026-07-20T05:00:00Z" },
+      ],
+      lastCommit: "2026-07-20T09:00:00+09:00",
+    });
+    const deps = h.deps as { exec: (cmd: string, opts?: { cwd?: string }) => Promise<ExecResult> };
+    const orig = deps.exec;
+    deps.exec = async (cmd, opts) => {
+      if (cmd.startsWith("git diff --name-only")) return { code: 0, stdout: "", stderr: "" };
+      if (cmd === "git ls-files -o --exclude-standard") return { code: 0, stdout: "", stderr: "" };
+      return orig(cmd, opts);
+    };
+    const r = await babysitPr(h.deps, PR);
+    expect(r.actions).toEqual([]);
+    expect(h.agentCalls).toHaveLength(1);
+    expect(h.agentCalls.some((c) => c.prompt.includes("コミットメッセージ"))).toBe(false);
     expect(h.execCalls.some((c) => c.startsWith("git push"))).toBe(false);
   });
 

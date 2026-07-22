@@ -6,7 +6,7 @@ import { runEfficiencyAgent } from "./efficiency-agent";
 import type { Github, PrComment, PrSummary } from "./github";
 import { safeRef } from "./git-ref";
 import { commitAll, passQualityGate } from "./run";
-import { runCommitMessage } from "./stages/commit-message";
+import { hasUncommittedChanges, runCommitMessage } from "./stages/commit-message";
 
 // コメントは第三者も書けるため、コード修正の指示として扱うのはリポジトリ関係者のものに限る
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -145,15 +145,17 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
       deps.log(`#${pr.number}: コンフリクト → composer が解消`);
       await deps.agent("composer", buildConflictPrompt(base), { cwd });
       await passQualityGate(deps, cwd, "composer");
-      const conflictCommitMessage = await runCommitMessage(
-        { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
-        {
-          reference: { kind: "pr", number: pr.number },
-          purpose: "conflict",
-          context: `origin/${base} の取り込みで発生した競合を解消`,
-        },
-      );
-      await commitAll(deps, cwd, conflictCommitMessage);
+      if (await hasUncommittedChanges({ exec: deps.exec, cwd })) {
+        const conflictCommitMessage = await runCommitMessage(
+          { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
+          {
+            reference: { kind: "pr", number: pr.number },
+            purpose: "conflict",
+            context: `origin/${base} の取り込みで発生した競合を解消`,
+          },
+        );
+        await commitAll(deps, cwd, conflictCommitMessage);
+      }
     }
     await push(deps, cwd, head);
     actions.push("conflict-resolved");
@@ -201,6 +203,10 @@ export async function babysitWorkdir(deps: BabysitDeps, pr: PrSummary, cwd: stri
       await passQualityGate(deps, cwd, agent, { scope: "incremental", changedFiles: files });
     }
     await passQualityGate(deps, cwd, agent);
+    if (!(await hasUncommittedChanges({ exec: deps.exec, cwd }, { sinceSha: beforeSha }))) {
+      deps.log(`#${pr.number}: 修正不要のためコミットをスキップ`);
+      return { number: pr.number, actions };
+    }
     const feedbackCommitMessage = await runCommitMessage(
       { agent: deps.agent, config: deps.config, exec: deps.exec, cwd },
       {

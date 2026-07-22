@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
-import { buildCommitMessagePrompt, runCommitMessage, validateCommitMessage } from "./commit-message";
+import { buildCommitMessagePrompt, collectCommitEvidence, hasUncommittedChanges, runCommitMessage, validateCommitMessage } from "./commit-message";
 
 const config = {
   commands: { lint: "bun run lint", typecheck: "bun run typecheck", test: "bun test" },
@@ -59,6 +59,53 @@ describe("runCommitMessage", () => {
     expect(buildCommitMessagePrompt({ reference: { kind: "pr", number: 3 }, purpose: "conflict" })).toContain(
       "双方の意図",
     );
+  });
+});
+
+describe("collectCommitEvidence", () => {
+  test("未追跡ファイルは intent-to-add して diff に含める", async () => {
+    const calls: string[] = [];
+    const evidence = await collectCommitEvidence({
+      cwd: "/wt/issue-14",
+      exec: async (command) => {
+        calls.push(command);
+        if (command === "git ls-files -o --exclude-standard") {
+          return { code: 0, stdout: "src/new.ts\n", stderr: "" };
+        }
+        if (command === "git add -N .") return { code: 0, stdout: "", stderr: "" };
+        if (command === "git status --short") return { code: 0, stdout: " A src/new.ts\n", stderr: "" };
+        if (command === "git diff --no-ext-diff") {
+          return { code: 0, stdout: "diff --git a/src/new.ts b/src/new.ts\n+export const x = 1;\n", stderr: "" };
+        }
+        if (command === "git diff --cached --no-ext-diff") return { code: 0, stdout: "", stderr: "" };
+        return { code: 1, stdout: "", stderr: "unexpected" };
+      },
+    });
+
+    expect(calls).toContain("git add -N .");
+    expect(evidence).toContain("src/new.ts");
+    expect(evidence).toContain("export const x = 1");
+  });
+});
+
+describe("hasUncommittedChanges", () => {
+  test("sinceSha 指定時は未追跡ファイルも変更として扱う", async () => {
+    const exec = async (command: string) => ({
+      code: 0,
+      stdout: command.startsWith("git diff --name-only")
+        ? ""
+        : command === "git ls-files -o --exclude-standard"
+          ? "src/new.ts\n"
+          : "",
+      stderr: "",
+    });
+    expect(await hasUncommittedChanges({ exec, cwd: "/wt" }, { sinceSha: "abc1234" })).toBe(true);
+  });
+
+  test("差分も未追跡もなければ false", async () => {
+    const exec = async () => ({ code: 0, stdout: "", stderr: "" });
+    expect(await hasUncommittedChanges({ exec, cwd: "/wt" }, { sinceSha: "abc1234" })).toBe(false);
+    expect(await hasUncommittedChanges({ exec, cwd: "/wt" })).toBe(false);
   });
 });
 
