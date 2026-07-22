@@ -95,6 +95,13 @@ export async function collectCommitEvidence(deps: { exec: Exec; cwd: string }): 
   ].join("\n").slice(0, 50_000);
 }
 
+// エージェントがメッセージを前置き・解説付きのコードフェンスで包んで返すことがある
+// （output style 混入等）。フェンスがあればその中身をメッセージ候補として採用する
+export function extractCommitMessageCandidate(output: string): string {
+  const fence = output.match(/```[^\n]*\n([\s\S]*?)```/);
+  return (fence ? fence[1]! : output).trim();
+}
+
 export function validateCommitMessage(output: string): string {
   const message = output.trim();
   const lines = message.split("\n");
@@ -132,5 +139,5 @@ export async function runCommitMessage(
     model: planningModelOption(deps.config, agent),
   });
   const reference = args.reference.kind === "issue" ? `#${args.reference.number}` : `PR #${args.reference.number}`;
-  return `${validateCommitMessage(output)}\n\n関連: ${reference}`;
+  return `${validateCommitMessage(extractCommitMessageCandidate(output))}\n\n関連: ${reference}`;
 }

@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
-import { buildCommitMessagePrompt, collectCommitEvidence, hasUncommittedChanges, runCommitMessage, validateCommitMessage } from "./commit-message";
+import {
+  buildCommitMessagePrompt,
+  collectCommitEvidence,
+  extractCommitMessageCandidate,
+  hasUncommittedChanges,
+  runCommitMessage,
+  validateCommitMessage,
+} from "./commit-message";
 
 const config = {
   commands: { lint: "bun run lint", typecheck: "bun run typecheck", test: "bun test" },
@@ -42,6 +49,14 @@ describe("runCommitMessage", () => {
     expect(calls[0]!.prompt).toContain("git diff --cached");
     expect(calls[0]!.prompt).toContain("Cookie解析の例外処理");
     expect(calls[0]!.opts).toEqual({ cwd: "/wt/issue-14", model: undefined });
+  });
+
+  test("エージェントが前置き付きコードフェンスで返してもフェンス内を採用する", async () => {
+    const message = await runCommitMessage(
+      { agent: async () => `以下がコミットメッセージです。\n\n\`\`\`\n${VALID}\n\`\`\``, config, exec, cwd: "/wt/issue-14" },
+      { reference: { kind: "issue", number: 14 }, purpose: "initial" },
+    );
+    expect(message).toBe(`${VALID}\n\n関連: #14`);
   });
 
   test("PR のフィードバック修正には PR 番号を付ける", async () => {
@@ -106,6 +121,21 @@ describe("hasUncommittedChanges", () => {
     const exec = async () => ({ code: 0, stdout: "", stderr: "" });
     expect(await hasUncommittedChanges({ exec, cwd: "/wt" }, { sinceSha: "abc1234" })).toBe(false);
     expect(await hasUncommittedChanges({ exec, cwd: "/wt" })).toBe(false);
+  });
+});
+
+describe("extractCommitMessageCandidate", () => {
+  test("前置きや解説に包まれたコードフェンスからフェンス内だけを取り出す", () => {
+    const output = `コミットメッセージを作成しました。\n\n\`\`\`\n${VALID}\n\`\`\`\n\n★ Insight ─────\nsubject は挙動を先に表しています。\n─────`;
+    expect(extractCommitMessageCandidate(output)).toBe(VALID);
+  });
+
+  test("言語タグ付きフェンスも取り出せる", () => {
+    expect(extractCommitMessageCandidate(`\`\`\`text\n${VALID}\n\`\`\``)).toBe(VALID);
+  });
+
+  test("フェンスがなければ trim して返す", () => {
+    expect(extractCommitMessageCandidate(`\n${VALID}\n`)).toBe(VALID);
   });
 });
 
