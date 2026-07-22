@@ -10,7 +10,8 @@ export type AgentRunner = (agent: AgentName, prompt: string, opts: AgentOpts) =>
 // NOTES.md の疎通確認で確定したコマンド。codex/cursor-agent は stdin を読む仕様のため /dev/null が必要。
 // claude はモデルを CLAUDE_MODEL 経由で差し替え可能（設計/レビューを Fable→Opus 等に切り替える用途）
 export const AGENT_COMMANDS: Record<AgentName, string> = {
-  claude: 'claude -p --output-format json ${CLAUDE_MODEL:+--model $CLAUDE_MODEL} < "$PROMPT_FILE"',
+  claude:
+    'claude -p --output-format json --setting-sources project,local ${CLAUDE_MODEL:+--model $CLAUDE_MODEL} < "$PROMPT_FILE"',
   codexSol: 'codex exec -s workspace-write -m gpt-5.6-sol "$(cat "$PROMPT_FILE")" < /dev/null',
   composer: 'cursor-agent -p --model composer-2.5 -f "$(cat "$PROMPT_FILE")" < /dev/null',
   composerFast: 'cursor-agent -p --model composer-2.5-fast -f "$(cat "$PROMPT_FILE")" < /dev/null',

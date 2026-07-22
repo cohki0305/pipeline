@@ -109,6 +109,38 @@ describe("createPr", () => {
     expect(calls[0]!.opts.env!.PR_TITLE).toBe("t");
     expect(readFileSync(calls[0]!.opts.env!.PR_BODY_FILE!, "utf8")).toBe("b");
   });
+
+  test("既存 PR がある場合はメタデータを更新して URL を返す（resume 時の冪等性）", async () => {
+    const calls: { cmd: string; opts: ExecOpts }[] = [];
+    const exec: Exec = async (cmd, opts = {}) => {
+      calls.push({ cmd, opts });
+      if (cmd.includes("gh pr create")) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: 'a pull request for branch "issue-220" into branch "main" already exists:\nhttps://github.com/x/y/pull/221',
+        };
+      }
+      if (cmd.includes("gh pr view")) {
+        return { code: 0, stdout: JSON.stringify({ url: "https://github.com/x/y/pull/221" }), stderr: "" };
+      }
+      if (cmd.includes("gh pr edit")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return { code: 1, stdout: "", stderr: "unexpected command" };
+    };
+    const url = await makeGithub(exec).createPr("/repo", { title: "t", body: "b", base: "main" });
+    expect(url).toBe("https://github.com/x/y/pull/221");
+    const editCall = calls.find((c) => c.cmd.includes("gh pr edit"));
+    expect(editCall).toBeDefined();
+    expect(editCall!.opts.env!.PR_TITLE).toBe("t");
+    expect(readFileSync(editCall!.opts.env!.PR_BODY_FILE!, "utf8")).toBe("b");
+  });
+
+  test("既存 PR 以外の失敗は throw する", async () => {
+    const { exec } = fakeExec({ code: 1, stdout: "", stderr: "boom" });
+    expect(makeGithub(exec).createPr("/repo", { title: "t", body: "b", base: "main" })).rejects.toThrow("PR 作成に失敗");
+  });
 });
 
 describe("getPrFailedChecks", () => {

@@ -65,6 +65,10 @@ describe("AGENT_COMMANDS", () => {
     expect(AGENT_COMMANDS.codexSol).toContain("< /dev/null");
   });
 
+  test("claude は user 設定を読まない（output style プラグインがコミットメッセージ等へ混入するのを防ぐ）", () => {
+    expect(AGENT_COMMANDS.claude).toContain("--setting-sources project,local");
+  });
+
   test("claude は JSON 出力、composer は composer-2.5 を指定する", () => {
     expect(AGENT_COMMANDS.claude).toContain("--output-format json");
     expect(AGENT_COMMANDS.composer).toContain("--model composer-2.5");

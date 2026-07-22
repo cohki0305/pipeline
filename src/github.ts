@@ -45,7 +45,20 @@ export function makeGithub(exec: Exec): Github {
         cwd,
         env: { PR_TITLE: title, PR_BODY_FILE: bodyFile },
       });
-      if (r.code !== 0) throw new Error(`PR 作成に失敗: ${r.stderr}`);
+      if (r.code !== 0) {
+        // resume で既存 PR がある場合は作成せず URL を返す（push 済みの追加コミットはその PR に載る）
+        if (r.stderr.includes("already exists")) {
+          const view = await exec("gh pr view --json url", { cwd });
+          if (view.code !== 0) throw new Error(`既存 PR の取得に失敗: ${view.stderr}`);
+          const edit = await exec(`gh pr edit --title "$PR_TITLE" --body-file "$PR_BODY_FILE"`, {
+            cwd,
+            env: { PR_TITLE: title, PR_BODY_FILE: bodyFile },
+          });
+          if (edit.code !== 0) throw new Error(`既存 PR の更新に失敗: ${edit.stderr}`);
+          return (JSON.parse(view.stdout) as { url: string }).url;
+        }
+        throw new Error(`PR 作成に失敗: ${r.stderr}`);
+      }
       return r.stdout.trim().split("\n").pop() ?? "";
     },
     async listOpenPrs(cwd) {
