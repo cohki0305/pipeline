@@ -110,7 +110,7 @@ describe("createPr", () => {
     expect(readFileSync(calls[0]!.opts.env!.PR_BODY_FILE!, "utf8")).toBe("b");
   });
 
-  test("既存 PR がある場合は gh pr view で URL を返す（resume 時の冪等性）", async () => {
+  test("既存 PR がある場合はメタデータを更新して URL を返す（resume 時の冪等性）", async () => {
     const calls: { cmd: string; opts: ExecOpts }[] = [];
     const exec: Exec = async (cmd, opts = {}) => {
       calls.push({ cmd, opts });
@@ -124,11 +124,17 @@ describe("createPr", () => {
       if (cmd.includes("gh pr view")) {
         return { code: 0, stdout: JSON.stringify({ url: "https://github.com/x/y/pull/221" }), stderr: "" };
       }
+      if (cmd.includes("gh pr edit")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
       return { code: 1, stdout: "", stderr: "unexpected command" };
     };
     const url = await makeGithub(exec).createPr("/repo", { title: "t", body: "b", base: "main" });
     expect(url).toBe("https://github.com/x/y/pull/221");
-    expect(calls.some((c) => c.cmd.includes("gh pr view"))).toBe(true);
+    const editCall = calls.find((c) => c.cmd.includes("gh pr edit"));
+    expect(editCall).toBeDefined();
+    expect(editCall!.opts.env!.PR_TITLE).toBe("t");
+    expect(readFileSync(editCall!.opts.env!.PR_BODY_FILE!, "utf8")).toBe("b");
   });
 
   test("既存 PR 以外の失敗は throw する", async () => {
