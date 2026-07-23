@@ -239,12 +239,13 @@ describe("runPipeline", () => {
     expect(body).toContain("https://pub-x.r2.dev/");
   });
 
-  test("uiScreenshot 設定が無いリポジトリでは撮影せずレポートに記録する", async () => {
+  test("uiScreenshot 設定なしでも既定値で撮影し PR 本文に追記する", async () => {
     const h = makeHarness({ complexity: "simple", screenshots: ["/"] });
     await runPipeline(h.deps, 143);
-    expect(h.execCalls.some((c) => c.includes("nohup"))).toBe(false);
-    const report = h.written.find((w) => w.path.endsWith("docs/runs/issue-143.md"));
-    expect(report!.content).toContain("uiScreenshot 設定が無いためスキップ");
+    expect(h.execCalls.some((c) => c.includes("nohup bun run dev"))).toBe(true);
+    const body = h.createdPrArgs[0]!.body;
+    expect(body).toContain("## スクリーンショット");
+    expect(body).toContain(".r2.dev/");
   });
 
   test("lintable blocking 指摘は設計ループを bypass する", async () => {

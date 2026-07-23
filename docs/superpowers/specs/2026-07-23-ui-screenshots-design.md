@@ -91,3 +91,14 @@ screenshots: ["/", "/settings"]
 - PR 本文へのセクション追記
 - 失敗時に PR 作成へ進む非ブロック動作
 - サーバー起動/停止コマンドの発行
+
+## 改訂 (2026-07-23 v2: ゼロコンフィグ化)
+
+per-repo 設定なしで動くように変更。`uiScreenshot` は全項目任意の上書きヒントに格下げ:
+
+- serve: 既定 `bun run dev`
+- baseUrl: 未指定なら composer がサーバーログの `Local: http://localhost:PORT` から特定
+- login: 未指定なら composer がリポジトリ（認証設定・seed）を調査してログイン方式とテスト用メールを特定。マジックリンクはサーバーログから取得
+- R2: 共通バケット `pipeline-screenshots`（cohki0305 アカウント）と公開 URL を既定値としてコードに保持。`wrangler r2 object put` は `--remote` 必須、bunx で対象リポジトリの依存から解決、`CLOUDFLARE_ACCOUNT_ID` を明示
+
+アカウント ID とバケット公開 URL は秘匿情報ではない（実質の鍵はキーのランダム 16hex）。

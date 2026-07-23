@@ -3,9 +3,37 @@ import type { AgentRunner } from "../agents";
 import type { PipelineConfig } from "../config";
 import type { Exec } from "../exec";
 
-export type ScreenshotConfig = NonNullable<PipelineConfig["uiScreenshot"]>;
 export type Shot = { page: string; url: string };
 export type ScreenshotResult = { shots: Shot[]; failures: string[] };
+
+/** 全リポジトリ共通の既定インフラ。アカウント ID とバケット URL は秘匿情報ではない（キーのランダム 16hex が実質の鍵） */
+export const R2_DEFAULTS = {
+  accountId: "64e49c2d094df7eb659a0e88d99ef51a",
+  bucket: "pipeline-screenshots",
+  publicBaseUrl: "https://pub-8113baf548a54f3a8f37bb5358097b97.r2.dev",
+} as const;
+
+export type EffectiveScreenshotConfig = {
+  serve: string;
+  baseUrl?: string;
+  login?: { path?: string; email?: string };
+  r2Bucket: string;
+  r2PublicBaseUrl: string;
+  r2AccountId: string;
+};
+
+/** 設定は全項目任意。未指定の項目は既定値と、composer によるリポジトリ・サーバーログからの自力発見で補う */
+export function resolveScreenshotConfig(config: PipelineConfig): EffectiveScreenshotConfig {
+  const cfg = config.uiScreenshot;
+  return {
+    serve: cfg?.serve ?? "bun run dev",
+    baseUrl: cfg?.baseUrl,
+    login: cfg?.login,
+    r2Bucket: cfg?.r2Bucket ?? R2_DEFAULTS.bucket,
+    r2PublicBaseUrl: cfg?.r2PublicBaseUrl ?? R2_DEFAULTS.publicBaseUrl,
+    r2AccountId: R2_DEFAULTS.accountId,
+  };
+}
 
 export function screenshotFileName(issueNumber: number, index: number, page: string): string {
   const slug = page.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "root";
@@ -13,24 +41,31 @@ export function screenshotFileName(issueNumber: number, index: number, page: str
 }
 
 export function buildScreenshotPrompt(
-  cfg: ScreenshotConfig,
+  cfg: EffectiveScreenshotConfig,
   args: { pages: string[]; files: string[]; outDir: string; serverLogPath: string },
 ): string {
-  const login = cfg.login
-    ? `2. ログインする: \`agent-browser open "${cfg.baseUrl}${cfg.login.path}"\` でログインページを開き、\`agent-browser snapshot\` でフォームを確認し、メールアドレス ${cfg.login.email} を入力して送信する。送信後、サーバーログ ${args.serverLogPath} にマジックリンク URL が出力されるので、grep 等で探して \`agent-browser open "<そのURL>"\` で開き、ログインを完了する（リンクがまだ無ければ数秒待って再確認する）
-`
-    : "";
+  const base = cfg.baseUrl
+    ? `1. ${cfg.baseUrl} が HTTP 応答を返すまで待つ（curl 等で確認。最大 90 秒。応答しなければ ${args.serverLogPath} の内容を出力して中断する）。以降これを <BASE> と呼ぶ`
+    : `1. サーバーログ ${args.serverLogPath} から dev サーバーのローカル URL（例: \`Local: http://localhost:5173\`）を特定し、HTTP 応答を返すまで待つ（最大 90 秒。まだログに出ていなければ数秒待って再確認する）。以降これを <BASE> と呼ぶ`;
+  const knownLogin = [
+    cfg.login?.path ? `ログインページは <BASE>${cfg.login.path}` : null,
+    cfg.login?.email ? `テスト用メールアドレスは ${cfg.login.email}` : null,
+  ].filter(Boolean);
+  const login = `2. 撮影対象がログインを要求する場合はログインする。${
+    knownLogin.length > 0 ? `既知の情報: ${knownLogin.join(" / ")}。` : ""
+  }不明な点はリポジトリを調査して特定する（認証設定からログイン方式を、seed やテストデータからテスト用メールアドレスを探す）。メールアドレス方式（マジックリンク）の場合は、フォームにメールアドレスを入力・送信した後、サーバーログ ${args.serverLogPath} に出力されるマジックリンク URL を grep 等で探し、\`agent-browser open "<そのURL>"\` で開いてログインを完了する（リンクがまだ無ければ数秒待って再確認する）。ログイン不要ならこの手順は飛ばす`;
   const shots = args.pages
     .map(
       (page, i) =>
-        `   - \`agent-browser open "${cfg.baseUrl}${page}"\` → \`agent-browser wait 1500\` → \`agent-browser screenshot ${args.outDir}/${args.files[i]}\``,
+        `   - \`agent-browser open "<BASE>${page}"\` → \`agent-browser wait 1500\` → \`agent-browser screenshot ${args.outDir}/${args.files[i]}\``,
     )
     .join("\n");
   return `あなたはブラウザ操作の担当。起動済みの開発サーバーの画面を agent-browser CLI（\`bunx agent-browser\`）で撮影せよ。リポジトリのコードを変更してはならない。
 
 手順:
-1. ${cfg.baseUrl} が HTTP 応答を返すまで待つ（curl 等で確認。最大 90 秒。応答しなければ ${args.serverLogPath} の内容を出力して中断する）
-${login}3. 以下のページを順番に撮影する（agent-browser はブラウザインスタンス共有のため並列実行不可）:
+${base}
+${login}
+3. 以下のページを順番に撮影する（agent-browser はブラウザインスタンス共有のため並列実行不可）:
 ${shots}
 4. 各ファイルが生成されていることを ls で確認する
 
@@ -58,8 +93,8 @@ export async function runScreenshotStage(
   deps: ScreenshotDeps,
   args: { cwd: string; issueNumber: number; pages: string[] },
 ): Promise<ScreenshotResult> {
-  const cfg = deps.config.uiScreenshot;
-  if (!cfg || args.pages.length === 0) return { shots: [], failures: [] };
+  if (args.pages.length === 0) return { shots: [], failures: [] };
+  const cfg = resolveScreenshotConfig(deps.config);
 
   const outDir = `${deps.config.worktreeRoot}/.pipeline-screenshots-issue-${args.issueNumber}`;
   const serverLogPath = `${outDir}/server.log`;
@@ -101,9 +136,13 @@ export async function runScreenshotStage(
       continue;
     }
     const key = `${prefix}/${files[i]}`;
+    // r2 object put はローカルシミュレーションが既定のため --remote 必須。wrangler は対象リポジトリの依存から bunx で解決する
     const upload = await deps.exec(
-      `wrangler r2 object put "$R2_KEY" --file "$SHOT_FILE" --content-type image/png`,
-      { cwd: args.cwd, env: { R2_KEY: `${cfg.r2Bucket}/${key}`, SHOT_FILE: file } },
+      `bunx wrangler r2 object put "$R2_KEY" --file "$SHOT_FILE" --content-type image/png --remote`,
+      {
+        cwd: args.cwd,
+        env: { R2_KEY: `${cfg.r2Bucket}/${key}`, SHOT_FILE: file, CLOUDFLARE_ACCOUNT_ID: cfg.r2AccountId },
+      },
     );
     if (upload.code !== 0) {
       failures.push(`${page}: R2 アップロードに失敗: ${upload.stderr.slice(0, 300)}`);

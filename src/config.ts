@@ -26,16 +26,20 @@ export type PipelineConfig = {
   autoFixCommands?: { lint?: string };
   /** 設計改訂・消し込みレビュー・ゲート修正など安価タスクの担当。未指定は composer（Composer 2.5 Standard） */
   efficiencyAgents?: Partial<Record<EfficiencyTask, EfficiencyTaskAgent>>;
-  /** UI 変更時のスクリーンショット撮影。未設定のリポジトリでは撮影しない */
+  /**
+   * UI 変更時のスクリーンショット撮影の上書き。全項目任意で、未指定は既定値
+   * （serve: "bun run dev"、R2 は共通バケット）と composer の自力発見
+   * （URL はサーバーログから、ログイン方式・テストメールはリポジトリ調査）で補う
+   */
   uiScreenshot?: {
     /** worktree で dev サーバーを起動するコマンド（pipeline がバックグラウンド起動・停止を管理） */
-    serve: string;
-    baseUrl: string;
-    /** マジックリンクログイン。dev サーバーがリンクをログに出力する構成が前提。無ければログインせず撮影 */
-    login?: { path: string; email: string };
-    r2Bucket: string;
+    serve?: string;
+    baseUrl?: string;
+    /** マジックリンクログインのヒント。dev サーバーがリンクをログに出力する構成が前提 */
+    login?: { path?: string; email?: string };
+    r2Bucket?: string;
     /** バケットの公開 URL（r2.dev またはカスタムドメイン）。末尾スラッシュなし */
-    r2PublicBaseUrl: string;
+    r2PublicBaseUrl?: string;
   };
 };
 
@@ -73,15 +77,6 @@ export function loadConfig(projectRoot: string): PipelineConfig {
           `efficiencyAgents.${task} は ${EFFICIENCY_TASK_AGENTS.join(" / ")} のいずれかです（指定値: ${JSON.stringify(agent)}）`,
         );
       }
-    }
-  }
-  if (cfg.uiScreenshot) {
-    for (const key of ["serve", "baseUrl", "r2Bucket", "r2PublicBaseUrl"] as const) {
-      if (!cfg.uiScreenshot[key]) throw new Error(`uiScreenshot.${key} が未設定です`);
-    }
-    const login = cfg.uiScreenshot.login;
-    if (login && (!login.path || !login.email)) {
-      throw new Error("uiScreenshot.login には path と email の両方が必要です");
     }
   }
   return cfg;

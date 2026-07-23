@@ -405,17 +405,13 @@ export async function runPipeline(
     if (usedIncrementalGate) await passQualityGate(deps, cwd);
 
     if (design.screenshots.length > 0) {
-      if (!deps.config.uiScreenshot) {
-        report.addStage("スクリーンショット", "設計書に撮影対象があるが uiScreenshot 設定が無いためスキップ");
-      } else {
-        screenshots = await runScreenshotStage(deps, { cwd, issueNumber, pages: design.screenshots });
-        const summary = [
-          `成功 ${screenshots.shots.length} / ${design.screenshots.length} 件`,
-          ...screenshots.shots.map((s) => `- ${s.page}: ${s.url}`),
-          ...screenshots.failures.map((f) => `- 失敗: ${f}`),
-        ].join("\n");
-        report.addStage("スクリーンショット", summary);
-      }
+      screenshots = await runScreenshotStage(deps, { cwd, issueNumber, pages: design.screenshots });
+      const summary = [
+        `成功 ${screenshots.shots.length} / ${design.screenshots.length} 件`,
+        ...screenshots.shots.map((s) => `- ${s.page}: ${s.url}`),
+        ...screenshots.failures.map((f) => `- 失敗: ${f}`),
+      ].join("\n");
+      report.addStage("スクリーンショット", summary);
     }
   } catch (e) {
     report.addStage("中断", e instanceof Error ? e.message.slice(0, 500) : String(e));

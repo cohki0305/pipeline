@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { PipelineConfig } from "../config";
 import type { ExecResult } from "../exec";
 import {
+  R2_DEFAULTS,
   appendScreenshotSection,
   buildScreenshotPrompt,
+  resolveScreenshotConfig,
   runScreenshotStage,
   screenshotFileName,
 } from "./screenshot";
@@ -16,14 +18,15 @@ const UI = {
   r2PublicBaseUrl: "https://pub-x.r2.dev",
 };
 
-const CONFIG = {
+const BASE_CONFIG = {
   commands: { lint: "l", typecheck: "tc", test: "t" },
   designDocDir: "docs/plans",
   reportDir: "docs/runs",
   baseBranch: "main",
   worktreeRoot: "/wt",
-  uiScreenshot: UI,
 } satisfies PipelineConfig;
+
+const CONFIG = { ...BASE_CONFIG, uiScreenshot: UI } satisfies PipelineConfig;
 
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
 
@@ -51,6 +54,23 @@ function makeDeps(opts: {
   return { deps, execCalls, agentCalls };
 }
 
+describe("resolveScreenshotConfig", () => {
+  test("設定なしは既定値（serve は bun run dev、R2 は共通バケット）", () => {
+    const cfg = resolveScreenshotConfig(BASE_CONFIG);
+    expect(cfg.serve).toBe("bun run dev");
+    expect(cfg.baseUrl).toBeUndefined();
+    expect(cfg.login).toBeUndefined();
+    expect(cfg.r2Bucket).toBe(R2_DEFAULTS.bucket);
+    expect(cfg.r2PublicBaseUrl).toBe(R2_DEFAULTS.publicBaseUrl);
+  });
+
+  test("部分指定は指定項目だけ上書きする", () => {
+    const cfg = resolveScreenshotConfig({ ...BASE_CONFIG, uiScreenshot: { serve: "npm run dev" } });
+    expect(cfg.serve).toBe("npm run dev");
+    expect(cfg.r2Bucket).toBe(R2_DEFAULTS.bucket);
+  });
+});
+
 describe("screenshotFileName", () => {
   test("パスを slug 化し、ルートは root にする", () => {
     expect(screenshotFileName(143, 0, "/")).toBe("issue-143-1-root.png");
@@ -59,25 +79,22 @@ describe("screenshotFileName", () => {
 });
 
 describe("buildScreenshotPrompt", () => {
-  test("login 設定があればマジックリンク手順を含める", () => {
-    const prompt = buildScreenshotPrompt(UI, {
-      pages: ["/"],
-      files: ["issue-1-1-root.png"],
-      outDir: "/out",
-      serverLogPath: "/out/server.log",
-    });
-    expect(prompt).toContain("マジックリンク");
+  const args = { pages: ["/"], files: ["issue-1-1-root.png"], outDir: "/out", serverLogPath: "/out/server.log" };
+
+  test("baseUrl とログインのヒントがあればプロンプトに埋め込む", () => {
+    const prompt = buildScreenshotPrompt(resolveScreenshotConfig(CONFIG), args);
+    expect(prompt).toContain("http://localhost:5173 が HTTP 応答");
+    expect(prompt).toContain("既知の情報");
     expect(prompt).toContain("pipeline-test@example.com");
-    expect(prompt).toContain("/out/server.log");
-    expect(prompt).toContain('agent-browser screenshot /out/issue-1-1-root.png');
+    expect(prompt).toContain("マジックリンク");
+    expect(prompt).toContain("agent-browser screenshot /out/issue-1-1-root.png");
   });
 
-  test("login 設定が無ければログイン手順を含めない", () => {
-    const prompt = buildScreenshotPrompt(
-      { ...UI, login: undefined },
-      { pages: ["/"], files: ["a.png"], outDir: "/out", serverLogPath: "/out/server.log" },
-    );
-    expect(prompt).not.toContain("マジックリンク");
+  test("設定なしは URL をサーバーログから、ログイン方法をリポジトリ調査で自力発見させる", () => {
+    const prompt = buildScreenshotPrompt(resolveScreenshotConfig(BASE_CONFIG), args);
+    expect(prompt).toContain("ローカル URL");
+    expect(prompt).toContain("リポジトリを調査");
+    expect(prompt).not.toContain("既知の情報");
   });
 });
 
@@ -94,20 +111,13 @@ describe("appendScreenshotSection", () => {
 });
 
 describe("runScreenshotStage", () => {
-  test("設定なし・対象なしは何もしない", async () => {
-    const noUi = { ...CONFIG, uiScreenshot: undefined };
-    const a = makeDeps({ config: noUi });
-    expect(await runScreenshotStage(a.deps, { cwd: "/w", issueNumber: 1, pages: ["/"] })).toEqual({
+  test("対象ページが無ければ何もしない", async () => {
+    const { deps, execCalls } = makeDeps({});
+    expect(await runScreenshotStage(deps, { cwd: "/w", issueNumber: 1, pages: [] })).toEqual({
       shots: [],
       failures: [],
     });
-    const b = makeDeps({});
-    expect(await runScreenshotStage(b.deps, { cwd: "/w", issueNumber: 1, pages: [] })).toEqual({
-      shots: [],
-      failures: [],
-    });
-    expect(a.execCalls).toHaveLength(0);
-    expect(b.execCalls).toHaveLength(0);
+    expect(execCalls).toHaveLength(0);
   });
 
   test("サーバー起動 → composer 撮影 → 停止 → R2 アップロードの順に実行する", async () => {
@@ -118,12 +128,21 @@ describe("runScreenshotStage", () => {
     expect(execCalls.some((c) => c.cmd.includes("kill"))).toBe(true);
     const uploads = execCalls.filter((c) => c.cmd.includes("wrangler r2 object put"));
     expect(uploads).toHaveLength(2);
+    expect(uploads[0]!.cmd).toContain("--remote");
     expect(uploads[0]!.env?.R2_KEY).toBe("pipeline-screenshots/deadbeefdeadbeef/issue-143-1-root.png");
+    expect(uploads[0]!.env?.CLOUDFLARE_ACCOUNT_ID).toBe(R2_DEFAULTS.accountId);
     expect(result.shots).toEqual([
       { page: "/", url: "https://pub-x.r2.dev/deadbeefdeadbeef/issue-143-1-root.png" },
       { page: "/settings", url: "https://pub-x.r2.dev/deadbeefdeadbeef/issue-143-2-settings.png" },
     ]);
     expect(result.failures).toEqual([]);
+  });
+
+  test("uiScreenshot 設定なしでも既定値で撮影・アップロードする", async () => {
+    const { deps, execCalls } = makeDeps({ config: BASE_CONFIG });
+    const result = await runScreenshotStage(deps, { cwd: "/w", issueNumber: 1, pages: ["/"] });
+    expect(execCalls[0]!.cmd).toContain("nohup bun run dev");
+    expect(result.shots[0]!.url).toBe(`${R2_DEFAULTS.publicBaseUrl}/deadbeefdeadbeef/issue-1-1-root.png`);
   });
 
   test("サーバー起動失敗は failures を返し composer を呼ばない", async () => {
