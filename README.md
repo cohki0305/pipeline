@@ -66,6 +66,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - lint/typecheck 違反は Composer 2.5 Standard が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）
 - **テスト失敗の修正とレビュー指摘の反映は complex でも Composer 2.5 開始**（`testFix` / `revisionImplement`）。直らずに次の attempt / レビューラウンドへ進んだら codexSol に昇格する。スコープの狭い差分修正で、直後の消し込みレビュー・ゲート再実行が答え合わせになるため
 - 消し込みレビュー・ゲート修正・babysit 修正は既定で **Composer 2.5 Standard**（`composer`）。CLI 失敗や再試行時は `composer → codexSol` と段階的に昇格する（`efficiencyAgents` で開始モデルを上書き可。速度優先なら `composerFast`）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
+- **UI スクリーンショット**（設定不要）: 設計担当が frontmatter に `screenshots: ["/path"]` を列挙した場合、レビュー完了後に pipeline が dev サーバー（既定 `bun run dev`）を起動し、Composer が agent-browser で撮影して、共通 R2 バケットへ推測不能キーでアップロードし PR 本文に画像を埋め込む。ローカル URL はサーバーログから、ログイン方式・テスト用メールはリポジトリ調査（seed 等）で Composer が自力発見し、マジックリンクはサーバーログから取得する。`uiScreenshot` 設定（serve / baseUrl / login / r2Bucket / r2PublicBaseUrl、全項目任意）で上書き可。撮影・アップロードの失敗は PR 作成をブロックしない。設計スペック: `docs/superpowers/specs/2026-07-23-ui-screenshots-design.md`
 - 修正ループ: 品質ゲートは最大 3 回。`incrementalCommands` があれば途中は変更ファイル向けコマンドを使い、PR 作成・push 前に必ずフルゲートを通す。増分コマンドには改行区切りの変更パスを `PIPELINE_CHANGED_FILES` で渡す
 - 内部レビューは維持し、指摘件数が減り続ける限り継続する。停滞（件数が減らない）または 3 ラウンドで停止する
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）

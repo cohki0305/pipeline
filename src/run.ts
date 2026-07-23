@@ -21,6 +21,7 @@ import { runCommitMessage } from "./stages/commit-message";
 import { loadDesign, loadExistingDesign, reviseDesignFromReview, runDesign } from "./stages/design";
 import { buildFixPrompt, buildLintableReviewFixPrompt, implementerFor, runImplement, runImplementRevision } from "./stages/implement";
 import { runPrBody } from "./stages/pr-body";
+import { appendScreenshotSection, runScreenshotStage, type ScreenshotResult } from "./stages/screenshot";
 import { runAutoFixLint, runQualityGate } from "./stages/quality-gate";
 import { type Finding, assignIds, isBlocking, partitionBlocking, runFollowupReview, runReview } from "./stages/review";
 
@@ -238,6 +239,7 @@ export async function runPipeline(
 
   let design: Awaited<ReturnType<typeof runDesign>>;
   let usedIncrementalGate = false;
+  let screenshots: ScreenshotResult | undefined;
   try {
     design = await acquireDesign({ ...deps, cwd }, issue, plan, options);
     state = {
@@ -401,6 +403,16 @@ export async function runPipeline(
 
     // 修正ループ中は増分ゲートを使えるが、公開前には必ずフルゲートで安全性を確認する。
     if (usedIncrementalGate) await passQualityGate(deps, cwd);
+
+    if (design.screenshots.length > 0) {
+      screenshots = await runScreenshotStage(deps, { cwd, issueNumber, pages: design.screenshots });
+      const summary = [
+        `成功 ${screenshots.shots.length} / ${design.screenshots.length} 件`,
+        ...screenshots.shots.map((s) => `- ${s.page}: ${s.url}`),
+        ...screenshots.failures.map((f) => `- 失敗: ${f}`),
+      ].join("\n");
+      report.addStage("スクリーンショット", summary);
+    }
   } catch (e) {
     report.addStage("中断", e instanceof Error ? e.message.slice(0, 500) : String(e));
     await deps.writeFile(`${cwd}/${reportPath}`, report.render());
@@ -417,10 +429,12 @@ export async function runPipeline(
     `docs: issue #${issueNumber} の検証結果と残課題を記録\n\n品質ゲートと内部レビューの結果、未対応の low 指摘と lint 化候補を追跡できるようにする。\n\n関連: #${issueNumber}`,
   );
 
-  const prBody = await runPrBody(
+  const prBodyBase = await runPrBody(
     { agent: deps.agent, config: deps.config, exec: deps.exec, readFile: deps.readFile, cwd },
     { issue, designDocPath: design.docPath, reportPath },
   );
+  // LLM に URL を扱わせず、生成・検証済みの本文へ機械的に追記する
+  const prBody = screenshots ? appendScreenshotSection(prBodyBase, screenshots) : prBodyBase;
 
   const push = await deps.exec(`git push -u origin ${safeRef(headBranch)}`, { cwd });
   if (push.code !== 0) throw new Error(`push に失敗: ${push.stderr}`);

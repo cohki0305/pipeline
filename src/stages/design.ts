@@ -4,7 +4,7 @@ import { planningModelOption, resolvePlanningAgent } from "../planning-agent";
 import type { Finding } from "./review";
 
 export type Complexity = "simple" | "complex";
-export type DesignResult = { complexity: Complexity; docPath: string; docContent: string };
+export type DesignResult = { complexity: Complexity; docPath: string; docContent: string; screenshots: string[] };
 
 // ユーザー定義の判断基準。実装時にユーザーに書いてもらう（フォールバック値）
 export const COMPLEXITY_CRITERIA = `- simple がデフォルト。新機能追加・新しいエンドポイントや画面・外部 API 連携・複数ファイルにまたがる変更・多少の設計判断を含む実装もすべて simple とする
@@ -16,10 +16,15 @@ export function buildDesignPrompt(issue: Issue): string {
 
 ---
 complexity: simple または complex
+screenshots: ["/path1", "/path2"]
 ---
 
 complexity の判断基準:
 ${COMPLEXITY_CRITERIA}
+
+screenshots の判断基準:
+- 画面の見た目・レイアウト・表示内容に影響する変更の場合のみ、変化を確認できるページのパスを JSON 配列で列挙する
+- UI に影響しない変更（API・バッチ・リファクタリング等）では screenshots 行自体を書かない
 
 計画に含めるもの:
 - 変更対象ファイルの一覧（実在するパスで）
@@ -31,12 +36,25 @@ ${COMPLEXITY_CRITERIA}
 ${issue.body}`;
 }
 
-export function parseDesignOutput(output: string): { complexity: Complexity; content: string } {
+export function parseDesignOutput(output: string): { complexity: Complexity; content: string; screenshots: string[] } {
   // 先頭の frontmatter ブロック内だけを探す（本文中の complexity 言及への誤マッチ防止）
   const fm = output.trimStart().match(/^---\n([\s\S]*?)\n---/);
   const m = fm?.[1]?.match(/complexity:\s*(simple|complex)/);
   if (!m) throw new Error("設計出力に complexity frontmatter がありません");
-  return { complexity: m[1] as Complexity, content: output };
+  return { complexity: m[1] as Complexity, content: output, screenshots: parseScreenshots(fm?.[1] ?? "") };
+}
+
+// 不正な値で設計全体を落とさない。撮影対象は "/" 始まりのパスだけを採用する
+function parseScreenshots(frontmatter: string): string[] {
+  const m = frontmatter.match(/screenshots:\s*(\[[^\]]*\])/);
+  if (!m) return [];
+  try {
+    const parsed: unknown = JSON.parse(m[1]!);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p): p is string => typeof p === "string" && p.startsWith("/"));
+  } catch {
+    return [];
+  }
 }
 
 // セッションで対話的に作った設計書をパイプラインに注入する経路。claude の設計呼び出しを省略する
@@ -45,8 +63,8 @@ export async function loadExistingDesign(
   docPath: string,
 ): Promise<DesignResult> {
   const output = await deps.readFile(`${deps.cwd}/${docPath}`);
-  const { complexity, content } = parseDesignOutput(output);
-  return { complexity, docPath, docContent: content };
+  const { complexity, content, screenshots } = parseDesignOutput(output);
+  return { complexity, docPath, docContent: content, screenshots };
 }
 
 export async function loadDesign(
@@ -61,10 +79,10 @@ export async function loadDesign(
   sourcePath: string,
 ): Promise<DesignResult> {
   const output = await deps.readFile(sourcePath);
-  const { complexity, content } = parseDesignOutput(output);
+  const { complexity, content, screenshots } = parseDesignOutput(output);
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;
   await deps.writeFile(`${deps.cwd}/${docPath}`, content);
-  return { complexity, docPath, docContent: content };
+  return { complexity, docPath, docContent: content, screenshots };
 }
 
 export function nextRevision(content: string): number {
@@ -106,7 +124,7 @@ export async function reviseDesignFromReview(
 ): Promise<DesignResult> {
   const content = appendReviewFindings(design.docContent, findings);
   await deps.writeFile(`${deps.cwd}/${design.docPath}`, content);
-  return { complexity: design.complexity, docPath: design.docPath, docContent: content };
+  return { complexity: design.complexity, docPath: design.docPath, docContent: content, screenshots: design.screenshots };
 }
 
 export async function runDesign(
@@ -124,8 +142,8 @@ export async function runDesign(
     cwd: deps.cwd,
     model: planningModelOption(deps.config, agent),
   });
-  const { complexity, content } = parseDesignOutput(output);
+  const { complexity, content, screenshots } = parseDesignOutput(output);
   const docPath = `${deps.config.designDocDir}/${date}-issue-${issue.number}.md`;
   await deps.writeFile(`${deps.cwd}/${docPath}`, content);
-  return { complexity, docPath, docContent: content };
+  return { complexity, docPath, docContent: content, screenshots };
 }
