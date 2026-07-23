@@ -21,7 +21,19 @@ const DOC = `---\ncomplexity: simple\n---\n\n# 計画`;
 
 describe("parseDesignOutput", () => {
   test("frontmatter から complexity を取り出す", () => {
-    expect(parseDesignOutput(DOC)).toEqual({ complexity: "simple", content: DOC });
+    expect(parseDesignOutput(DOC)).toEqual({ complexity: "simple", content: DOC, screenshots: [] });
+  });
+
+  test("frontmatter の screenshots を取り出す", () => {
+    const doc = `---\ncomplexity: simple\nscreenshots: ["/", "/settings"]\n---\n\n# 計画`;
+    expect(parseDesignOutput(doc).screenshots).toEqual(["/", "/settings"]);
+  });
+
+  test("screenshots の不正値は空配列に落とす（設計全体を落とさない）", () => {
+    const invalidJson = `---\ncomplexity: simple\nscreenshots: [broken\n---\n\n# 計画`;
+    expect(parseDesignOutput(invalidJson).screenshots).toEqual([]);
+    const nonPath = `---\ncomplexity: simple\nscreenshots: ["settings", 1, "/ok"]\n---\n\n# 計画`;
+    expect(parseDesignOutput(nonPath).screenshots).toEqual(["/ok"]);
   });
 
   test("complexity がなければ throw する", () => {

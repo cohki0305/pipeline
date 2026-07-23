@@ -35,6 +35,13 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
        "lint": "bun run lint:changed",
        "test": "bun run test:changed"
      },
+     "uiScreenshot": {
+       "serve": "bun run dev",
+       "baseUrl": "http://localhost:5173",
+       "login": { "path": "/login", "email": "pipeline-test@example.com" },
+       "r2Bucket": "pipeline-screenshots",
+       "r2PublicBaseUrl": "https://pub-xxxx.r2.dev"
+     },
      "efficiencyAgents": {
        "followupReview": "composer",
        "gateFix": "composer",
@@ -66,6 +73,7 @@ ln -sf ~/agent-pipeline/bin/pipeline ~/.local/bin/pipeline   # PATH 上に置く
 - lint/typecheck 違反は Composer 2.5 Standard が修正（`autoFixCommands.lint` があれば composer 呼び出し前に自動実行）
 - **テスト失敗の修正とレビュー指摘の反映は complex でも Composer 2.5 開始**（`testFix` / `revisionImplement`）。直らずに次の attempt / レビューラウンドへ進んだら codexSol に昇格する。スコープの狭い差分修正で、直後の消し込みレビュー・ゲート再実行が答え合わせになるため
 - 消し込みレビュー・ゲート修正・babysit 修正は既定で **Composer 2.5 Standard**（`composer`）。CLI 失敗や再試行時は `composer → codexSol` と段階的に昇格する（`efficiencyAgents` で開始モデルを上書き可。速度優先なら `composerFast`）。初回設計・初回フルレビューは `planningAgent`（既定 claude）
+- **UI スクリーンショット**（`uiScreenshot` 設定時のみ）: 設計担当が frontmatter に `screenshots: ["/path"]` を列挙した場合、レビュー完了後に pipeline が dev サーバーを起動し、Composer が agent-browser で撮影（`login` 設定があればメール送信 → サーバーログのマジックリンクでログイン）、R2 へ推測不能キーでアップロードし PR 本文に画像を埋め込む。撮影・アップロードの失敗は PR 作成をブロックしない。設計スペック: `docs/superpowers/specs/2026-07-23-ui-screenshots-design.md`
 - 修正ループ: 品質ゲートは最大 3 回。`incrementalCommands` があれば途中は変更ファイル向けコマンドを使い、PR 作成・push 前に必ずフルゲートを通す。増分コマンドには改行区切りの変更パスを `PIPELINE_CHANGED_FILES` で渡す
 - 内部レビューは維持し、指摘件数が減り続ける限り継続する。停滞（件数が減らない）または 3 ラウンドで停止する
 - severity ゲート: 修正ループの対象は critical/high/medium のみ。low はループを止めず実行レポートの「未対応の low 指摘」に記録される（機械化できるものは custom lint 化で吸収する方針）

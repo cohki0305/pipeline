@@ -12,8 +12,8 @@ const CONFIG = {
   worktreeRoot: "/wt",
 } satisfies PipelineConfig;
 
-const DESIGN = (c: "simple" | "complex", revision?: number) =>
-  `---\ncomplexity: ${c}${revision ? `\nrevision: ${revision}` : ""}\n---\n# 計画`;
+const DESIGN = (c: "simple" | "complex", revision?: number, screenshots?: string[]) =>
+  `---\ncomplexity: ${c}${revision ? `\nrevision: ${revision}` : ""}${screenshots ? `\nscreenshots: ${JSON.stringify(screenshots)}` : ""}\n---\n# 計画`;
 const OK: ExecResult = { code: 0, stdout: "", stderr: "" };
 const COMMIT_MESSAGE = `feat: 回答状態の判定を安全化
 
@@ -85,7 +85,7 @@ function makeHarness(opts: {
   const failures = (opts.gateFailures ?? []).map((f) => ({ ...f }));
 
   const deps = {
-    config: { ...CONFIG, autoFixCommands: opts.autoFixCommands },
+    config: { ...CONFIG, autoFixCommands: opts.autoFixCommands, uiScreenshot: opts.uiScreenshot },
     exec: async (cmd: string, execOpts?: { env?: Record<string, string> }): Promise<ExecResult> => {
       execCalls.push(cmd);
       if (execOpts?.env?.COMMIT_MSG) commitMessages.push(execOpts.env.COMMIT_MSG);
@@ -113,7 +113,7 @@ function makeHarness(opts: {
       if (prompt.includes("GitHub PR 本文")) return PR_BODY;
       if (prompt.includes("コミットメッセージ")) return COMMIT_MESSAGE;
       if (prompt.includes("現行の実装計画")) return DESIGN(opts.complexity, 2);
-      if (prompt.includes("complexity の判断基準")) return DESIGN(opts.complexity);
+      if (prompt.includes("complexity の判断基準")) return DESIGN(opts.complexity, undefined, opts.screenshots);
       if (prompt.includes("指摘せよ")) return reviews.shift() ?? "[]";
       if (prompt.includes('"remaining"')) return reviews.shift() ?? '{"fixed": [], "remaining": []}';
       return "";
@@ -218,6 +218,33 @@ describe("runPipeline", () => {
     await runPipeline(h.deps, 143);
     const revisions = h.agentCalls.filter((c) => c.prompt.includes("更新された実装計画"));
     expect(revisions.map((c) => c.agent)).toEqual(["composer", "codexSol"]);
+  });
+
+  test("設計書に screenshots があれば composer が撮影し PR 本文に追記する", async () => {
+    const h = makeHarness({
+      complexity: "simple",
+      screenshots: ["/settings"],
+      uiScreenshot: {
+        serve: "bun run dev",
+        baseUrl: "http://localhost:5173",
+        r2Bucket: "shots",
+        r2PublicBaseUrl: "https://pub-x.r2.dev",
+      },
+    });
+    await runPipeline(h.deps, 143);
+    expect(h.agentCalls.some((c) => c.agent === "composer" && c.prompt.includes("agent-browser"))).toBe(true);
+    expect(h.execCalls.some((c) => c.includes("wrangler r2 object put"))).toBe(true);
+    const body = h.createdPrArgs[0]!.body;
+    expect(body).toContain("## スクリーンショット");
+    expect(body).toContain("https://pub-x.r2.dev/");
+  });
+
+  test("uiScreenshot 設定が無いリポジトリでは撮影せずレポートに記録する", async () => {
+    const h = makeHarness({ complexity: "simple", screenshots: ["/"] });
+    await runPipeline(h.deps, 143);
+    expect(h.execCalls.some((c) => c.includes("nohup"))).toBe(false);
+    const report = h.written.find((w) => w.path.endsWith("docs/runs/issue-143.md"));
+    expect(report!.content).toContain("uiScreenshot 設定が無いためスキップ");
   });
 
   test("lintable blocking 指摘は設計ループを bypass する", async () => {
